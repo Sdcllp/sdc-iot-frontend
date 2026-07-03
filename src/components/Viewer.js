@@ -308,7 +308,8 @@ export default function Viewer() {
     directionalLight2.position.set(-40, 30, -30);
     scene.add(directionalLight2);
 
-    scene.add(new THREE.GridHelper(200, 50));
+  const gridHelper = new THREE.GridHelper(200, 50);
+scene.add(gridHelper);
 
     const modelGroup = new THREE.Group();
     scene.add(modelGroup);
@@ -393,9 +394,9 @@ export default function Viewer() {
         : [mesh.material];
 
       materials.forEach((mat) => {
-        if ("color" in mat) mat.color.setHex(0xff0000);
+        if ("color" in mat) mat.color.setHex(0xffc107);
         if ("emissive" in mat) {
-          mat.emissive.setHex(0xff0000);
+          mat.color.setHex(0xffc107);
           mat.emissiveIntensity = 1.4;
         }
       });
@@ -452,9 +453,12 @@ export default function Viewer() {
         }));
 
         materials.forEach((mat) => {
-          mat.transparent = true;
-          mat.opacity = 0.12;
-          mat.depthWrite = false;
+       mat.transparent = true;
+mat.opacity = 0.18;
+mat.depthWrite = true;
+mat.polygonOffset = true;
+mat.polygonOffsetFactor = 1;
+mat.polygonOffsetUnits = 1;
         });
 
         transparentObjectsRef.current.push({ mesh: child, original });
@@ -491,36 +495,45 @@ controls.enableRotate = true;
       selectedObjectRef.current = null;
     };
 
- const insideView = () => {
+const insideView = () => {
   makeWallTransparent();
+  gridHelper.visible = false;
 
   const box = new THREE.Box3().setFromObject(modelGroup);
   const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
 
-  // Camera room ke center ke andar
+  const eyeHeight = center.y + size.y * 0.35;
+
   camera.position.set(
     center.x,
-    center.y + size.y * 0.45,
-    center.z
+    eyeHeight,
+    center.z + size.z * 0.35
   );
 
-  // Orbit room ke center par hoga
   controls.target.set(
     center.x,
-    center.y + size.y * 0.45,
-    center.z - 1
+    eyeHeight,
+    center.z - size.z * 0.45
   );
 
-  // Sirf rotate, pan nahi
-  controls.enablePan = false;
-controls.minDistance = 1;
-camera.near = 0.5;
-camera.far = 5000;
-camera.updateProjectionMatrix();
-  controls.maxDistance = 2;
+  controls.enablePan = true;
+  controls.enableZoom = true;
+  controls.enableRotate = true;
 
+  controls.minDistance = 0.5;
+  controls.maxDistance = Math.max(size.x, size.z) * 1.2;
+
+  camera.near = 0.01;
+  camera.far = 5000;
+  camera.fov = 75;
+  camera.updateProjectionMatrix();
+
+  camera.lookAt(controls.target);
   controls.update();
+
+  if (popupRef.current) popupRef.current.style.display = "none";
+  selectedObjectRef.current = null;
 };
 
     const moveCameraToMesh = (mesh) => {
@@ -873,6 +886,7 @@ camera.position.set(
 
       clearHighlight();
       restoreTransparency();
+      gridHelper.visible = true;
       controls.dispose();
       renderer.dispose();
 
