@@ -902,6 +902,7 @@ camera.position.set(
         mount.removeChild(renderer.domElement);
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const devices = [
