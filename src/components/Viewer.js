@@ -4,13 +4,14 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { io } from "socket.io-client";
-
-const API_BASE_URL =
-  window.location.hostname === "localhost"
+const API_BASE_URL = (
+  process.env.REACT_APP_API_BASE_URL ||
+  (window.location.hostname === "localhost"
     ? "http://localhost:5000/api"
-    : "https://sdc-iot-backend.onrender.com/api";
+    : "https://sdc-iot-backend.onrender.com/api")
+).replace(/\/$/, "");
 
-const SOCKET_URL = API_BASE_URL.replace("/api", "");
+const SOCKET_URL = API_BASE_URL.replace(/\/api$/, "");
 
 
 
@@ -109,57 +110,78 @@ panasonicAcTemp:24,
     latestDeviceDataRef.current = deviceData;
   }, [deviceData]);
 
-  useEffect(() => {
-    const socket = io(SOCKET_URL, {
-      transports: ["websocket"],
-    });
+useEffect(() => {
+  const socket = io(SOCKET_URL, {
+    transports: ["websocket", "polling"],
+    reconnection: true,
+  });
 
-    socket.on("connect", () => {
-      console.log("✅ Socket connected");
-    });
+  socket.on("connect", () => {
+    console.log("✅ Socket connected:", SOCKET_URL);
+  });
 
-    socket.on("deviceData", (data) => {
-      setDeviceData(data);
-    });
+  socket.on("deviceData", (data) => {
+    setDeviceData(data);
+  });
 
-    socket.on("disconnect", () => {
-      console.log("❌ Socket disconnected");
-    });
+  socket.on("connect_error", (error) => {
+    console.error("❌ Socket error:", error.message);
+  });
 
-    return () => socket.disconnect();
-  }, []);
+  socket.on("disconnect", () => {
+    console.log("❌ Socket disconnected");
+  });
 
-  const controlLight = async (state) => {
-    try {
-      setSending(true);
-      const res = await axios.post(`${API_BASE_URL}/devices/light`, { state });
+  return () => socket.disconnect();
+}, []);
+const getErrorMessage = (error, fallback) => {
+  console.error(fallback, error.response?.data || error.message);
 
-      if (res.data?.success) {
-        setDeviceData(res.data.data);
-        setControlMessage(res.data.message || `Light ${state}`);
-      }
-    } catch {
-      setControlMessage("Failed to control light");
-    } finally {
-      setSending(false);
+  return (
+    error.response?.data?.message ||
+    error.response?.data?.error ||
+    error.message ||
+    fallback
+  );
+};
+const controlLight = async (state) => {
+  try {
+    setSending(true);
+    setControlMessage("");
+
+    const res = await axios.post(`${API_BASE_URL}/devices/light`, { state });
+
+    if (res.data?.success) {
+      setDeviceData(res.data.data);
+      setControlMessage(res.data.message || `Light ${state}`);
+    } else {
+      setControlMessage(res.data?.message || "Light control failed");
     }
-  };
+  } catch (error) {
+    setControlMessage(getErrorMessage(error, "Failed to control light"));
+  } finally {
+    setSending(false);
+  }
+};
+const controlAC = async (state) => {
+  try {
+    setSending(true);
+    setControlMessage("");
 
-  const controlAC = async (state) => {
-    try {
-      setSending(true);
-      const res = await axios.post(`${API_BASE_URL}/devices/ac`, { state });
+    const res = await axios.post(`${API_BASE_URL}/devices/ac`, { state });
 
-      if (res.data?.success) {
-        setDeviceData(res.data.data);
-        setControlMessage(res.data.message || `AC ${state}`);
-      }
-    } catch {
-      setControlMessage("Failed to control AC");
-    } finally {
-      setSending(false);
+    if (res.data?.success) {
+      setDeviceData(res.data.data);
+      setControlMessage(res.data.message || `AC ${state}`);
+    } else {
+      setControlMessage(res.data?.message || "AC control failed");
     }
-  };
+  } catch (error) {
+    setControlMessage(getErrorMessage(error, "Failed to control AC"));
+  } finally {
+    setSending(false);
+  }
+};
 const controlPanasonicAC = async (state) => {
   try {
 
@@ -192,22 +214,25 @@ const controlPanasonicAC = async (state) => {
 
   }
 };
-  const controlACTemp = async (temp) => {
-    try {
-      setSending(true);
-      const res = await axios.post(`${API_BASE_URL}/devices/ac-temp`, { temp });
+const controlACTemp = async (temp) => {
+  try {
+    setSending(true);
+    setControlMessage("");
 
-      if (res.data?.success) {
-        setDeviceData(res.data.data);
-        setControlMessage(res.data.message || `AC temp set to ${temp}°C`);
-      }
-    } catch {
-      setControlMessage("Failed to set AC temperature");
-    } finally {
-      setSending(false);
+    const res = await axios.post(`${API_BASE_URL}/devices/ac-temp`, { temp });
+
+    if (res.data?.success) {
+      setDeviceData(res.data.data);
+      setControlMessage(res.data.message || `AC temp set to ${temp}°C`);
+    } else {
+      setControlMessage(res.data?.message || "AC temperature failed");
     }
-  };
-
+  } catch (error) {
+    setControlMessage(getErrorMessage(error, "Failed to set AC temperature"));
+  } finally {
+    setSending(false);
+  }
+};
   const detectDeviceType = (name = "", mesh = null) => {
     const raw = cleanName(name).toLowerCase().replace(/\s+/g, "");
 if (mesh && meshMapRef.current.ac === mesh)
@@ -1024,7 +1049,7 @@ renderer.render(scene, camera);
       >
         <h3 style={{ marginTop: 0 }}>Smart Room Panel</h3>
 
-        {loadedFile && (
+        {/* {loadedFile && (
           <div
             style={{
               marginBottom: "14px",
@@ -1038,7 +1063,7 @@ renderer.render(scene, camera);
           >
             Loaded file: {loadedFile}
           </div>
-        )}
+        )} */}
 
         {loadError && (
           <div
