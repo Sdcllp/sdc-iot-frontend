@@ -4,6 +4,8 @@ import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 import { io } from "socket.io-client";
+import "./Viewer.css";
+
 const API_BASE_URL = (
   process.env.REACT_APP_API_BASE_URL ||
   (window.location.hostname === "localhost"
@@ -12,8 +14,6 @@ const API_BASE_URL = (
 ).replace(/\/$/, "");
 
 const SOCKET_URL = API_BASE_URL.replace(/\/api$/, "");
-
-
 
 const DEVICE_NAME_HINTS = {
   ac: ["ac", "airconditioner", "air_conditioner", "acunit", "ac_unit", "hvac"],
@@ -25,37 +25,14 @@ const DEVICE_NAME_HINTS = {
 };
 
 const MANUAL_DEVICE_MESH_NAMES = {
-  ac: [
-    "mesh 57",
-    "mesh_57",
-    "Mesh 57",
-    "AC"
-  ],
-
- panasonicAc: [
+  ac: ["mesh 57", "mesh_57", "Mesh 57", "AC"],
+  panasonicAc: [
     "Object mesh 6 1",
     "mesh 6 1",
     "mesh_6_1",
     "Mesh 6 1",
-    "Panasonic AC"
-  ]
-};
-
-const buttonStyle = {
-  padding: "10px 14px",
-  border: "1px solid #d1d5db",
-  borderRadius: "8px",
-  background: "#ffffff",
-  cursor: "pointer",
-  fontWeight: 600,
-};
-
-const smallButtonStyle = {
-  padding: "8px 12px",
-  border: "1px solid #d1d5db",
-  borderRadius: "8px",
-  background: "#ffffff",
-  cursor: "pointer",
+    "Panasonic AC",
+  ],
 };
 
 const cleanName = (name = "") => {
@@ -91,7 +68,7 @@ export default function Viewer() {
     ac: "OFF",
     acTemp: 24,
     panasonicAc: "OFF",
-panasonicAcTemp:24,
+    panasonicAcTemp: 24,
     updatedAt: null,
   });
 
@@ -110,145 +87,147 @@ panasonicAcTemp:24,
     latestDeviceDataRef.current = deviceData;
   }, [deviceData]);
 
-useEffect(() => {
-  const socket = io(SOCKET_URL, {
-    transports: ["websocket", "polling"],
-    reconnection: true,
-  });
+  useEffect(() => {
+    const socket = io(SOCKET_URL, {
+      transports: ["websocket", "polling"],
+      reconnection: true,
+    });
 
-  socket.on("connect", () => {
-    console.log("✅ Socket connected:", SOCKET_URL);
-  });
+    socket.on("connect", () => {
+      console.log("✅ Socket connected:", SOCKET_URL);
+    });
 
-  socket.on("deviceData", (data) => {
-    setDeviceData(data);
-  });
+    socket.on("deviceData", (data) => {
+      setDeviceData((prev) => ({ ...prev, ...data }));
+    });
 
-  socket.on("connect_error", (error) => {
-    console.error("❌ Socket error:", error.message);
-  });
+    socket.on("connect_error", (error) => {
+      console.error("❌ Socket error:", error.message);
+    });
 
-  socket.on("disconnect", () => {
-    console.log("❌ Socket disconnected");
-  });
+    socket.on("disconnect", () => {
+      console.log("❌ Socket disconnected");
+    });
 
-  return () => socket.disconnect();
-}, []);
-const getErrorMessage = (error, fallback) => {
-  console.error(fallback, error.response?.data || error.message);
+    return () => socket.disconnect();
+  }, []);
 
-  return (
-    error.response?.data?.message ||
-    error.response?.data?.error ||
-    error.message ||
-    fallback
-  );
-};
-const controlLight = async (state) => {
-  try {
-    setSending(true);
-    setControlMessage("");
+  const getErrorMessage = (error, fallback) => {
+    console.error(fallback, error.response?.data || error.message);
 
-    const res = await axios.post(`${API_BASE_URL}/devices/light`, { state });
-
-    if (res.data?.success) {
-      setDeviceData(res.data.data);
-      setControlMessage(res.data.message || `Light ${state}`);
-    } else {
-      setControlMessage(res.data?.message || "Light control failed");
-    }
-  } catch (error) {
-    setControlMessage(getErrorMessage(error, "Failed to control light"));
-  } finally {
-    setSending(false);
-  }
-};
-const controlAC = async (state) => {
-  try {
-    setSending(true);
-    setControlMessage("");
-
-    const res = await axios.post(`${API_BASE_URL}/devices/ac`, { state });
-
-    if (res.data?.success) {
-      setDeviceData(res.data.data);
-      setControlMessage(res.data.message || `AC ${state}`);
-    } else {
-      setControlMessage(res.data?.message || "AC control failed");
-    }
-  } catch (error) {
-    setControlMessage(getErrorMessage(error, "Failed to control AC"));
-  } finally {
-    setSending(false);
-  }
-};
-const controlPanasonicAC = async (state) => {
-  try {
-
-    setSending(true);
-
-    const res = await axios.post(
-      `${API_BASE_URL}/devices/panasonic-ac`,
-      { state }
+    return (
+      error.response?.data?.message ||
+      error.response?.data?.error ||
+      error.message ||
+      fallback
     );
+  };
 
-    if (res.data?.success) {
+  const controlLight = async (state) => {
+    try {
+      setSending(true);
+      setControlMessage("");
 
-      setDeviceData(res.data.data);
+      const res = await axios.post(`${API_BASE_URL}/devices/light`, { state });
 
+      if (res.data?.success) {
+        setDeviceData((prev) => ({ ...prev, ...res.data.data }));
+        setControlMessage(res.data.message || `Light ${state}`);
+      } else {
+        setControlMessage(res.data?.message || "Light control failed");
+      }
+    } catch (error) {
+      setControlMessage(getErrorMessage(error, "Failed to control light"));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const controlAC = async (state) => {
+    try {
+      setSending(true);
+      setControlMessage("");
+
+      const res = await axios.post(`${API_BASE_URL}/devices/ac`, { state });
+
+      if (res.data?.success) {
+        setDeviceData((prev) => ({ ...prev, ...res.data.data }));
+        setControlMessage(res.data.message || `AC ${state}`);
+      } else {
+        setControlMessage(res.data?.message || "AC control failed");
+      }
+    } catch (error) {
+      setControlMessage(getErrorMessage(error, "Failed to control AC"));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const controlPanasonicAC = async (state) => {
+    try {
+      setSending(true);
+      setControlMessage("");
+
+      const res = await axios.post(`${API_BASE_URL}/devices/panasonic-ac`, {
+        state,
+      });
+
+      if (res.data?.success) {
+        setDeviceData((prev) => ({ ...prev, ...res.data.data }));
+        setControlMessage(res.data.message || `Panasonic AC ${state}`);
+      } else {
+        setControlMessage(res.data?.message || "Panasonic AC control failed");
+      }
+    } catch (error) {
       setControlMessage(
-        res.data.message ||
-        `Panasonic AC ${state}`
+        getErrorMessage(error, "Failed to control Panasonic AC")
       );
+    } finally {
+      setSending(false);
     }
+  };
 
-  } catch {
+  const controlACTemp = async (temp) => {
+    try {
+      setSending(true);
+      setControlMessage("");
 
-    setControlMessage(
-      "Failed to control Panasonic AC"
-    );
+      const res = await axios.post(`${API_BASE_URL}/devices/ac-temp`, { temp });
 
-  } finally {
-
-    setSending(false);
-
-  }
-};
-const controlACTemp = async (temp) => {
-  try {
-    setSending(true);
-    setControlMessage("");
-
-    const res = await axios.post(`${API_BASE_URL}/devices/ac-temp`, { temp });
-
-    if (res.data?.success) {
-      setDeviceData(res.data.data);
-      setControlMessage(res.data.message || `AC temp set to ${temp}°C`);
-    } else {
-      setControlMessage(res.data?.message || "AC temperature failed");
+      if (res.data?.success) {
+        setDeviceData((prev) => ({ ...prev, ...res.data.data }));
+        setControlMessage(res.data.message || `AC temp set to ${temp}°C`);
+      } else {
+        setControlMessage(res.data?.message || "AC temperature failed");
+      }
+    } catch (error) {
+      setControlMessage(getErrorMessage(error, "Failed to set AC temperature"));
+    } finally {
+      setSending(false);
     }
-  } catch (error) {
-    setControlMessage(getErrorMessage(error, "Failed to set AC temperature"));
-  } finally {
-    setSending(false);
-  }
-};
+  };
+
   const detectDeviceType = (name = "", mesh = null) => {
     const raw = cleanName(name).toLowerCase().replace(/\s+/g, "");
-if (mesh && meshMapRef.current.ac === mesh)
-return "ac";
 
-if (
-mesh &&
-meshMapRef.current.panasonicAc===mesh
-)
-return "panasonicAc";
+    if (mesh && meshMapRef.current.ac === mesh) return "ac";
+    if (mesh && meshMapRef.current.panasonicAc === mesh) return "panasonicAc";
+    if (mesh && meshMapRef.current.light === mesh) return "light";
 
-if (mesh && meshMapRef.current.light === mesh)
-return "light";
-
-    if (MANUAL_DEVICE_MESH_NAMES.ac.some((item) => item.toLowerCase() === cleanName(name).toLowerCase())) {
+    if (
+      MANUAL_DEVICE_MESH_NAMES.ac.some(
+        (item) => item.toLowerCase() === cleanName(name).toLowerCase()
+      )
+    ) {
       return "ac";
+    }
+
+    if (
+      MANUAL_DEVICE_MESH_NAMES.panasonicAc.some(
+        (item) => item.toLowerCase() === cleanName(name).toLowerCase()
+      )
+    ) {
+      return "panasonicAc";
     }
 
     for (const [type, hints] of Object.entries(DEVICE_NAME_HINTS)) {
@@ -262,13 +241,20 @@ return "light";
 
   const goToDevice = (type) => {
     const mesh = meshMapRef.current[type];
+
     if (!mesh) {
       setControlMessage(`${type.toUpperCase()} object not found in model`);
       return;
     }
 
     selectedObjectRef.current = mesh;
-    setSelectedName(type.toUpperCase());
+    setSelectedName(
+      type === "panasonicAc"
+        ? "Panasonic AC"
+        : type === "ac"
+        ? "AC"
+        : type.toUpperCase()
+    );
     setSelectedControl(type);
     flyToMeshRef.current?.(mesh, type.toUpperCase());
   };
@@ -291,22 +277,12 @@ return "light";
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(mount.clientWidth, mount.clientHeight);
-    renderer.setPixelRatio(window.devicePixelRatio || 1);
     mount.appendChild(renderer.domElement);
 
     const popup = document.createElement("div");
-    popup.style.position = "absolute";
-    popup.style.zIndex = "40";
-    popup.style.padding = "9px 12px";
-    popup.style.borderRadius = "10px";
-    popup.style.fontWeight = "700";
-    popup.style.fontSize = "13px";
-    popup.style.pointerEvents = "none";
-    popup.style.boxShadow = "0 8px 22px rgba(0,0,0,0.25)";
-    popup.style.background = "#ffffff";
-    popup.style.color = "#111827";
-    popup.style.border = "1px solid #d1d5db";
+    popup.className = "model-popup";
     popup.style.display = "none";
     mount.appendChild(popup);
     popupRef.current = popup;
@@ -378,7 +354,10 @@ return "light";
         return newMat;
       });
 
-      mesh.material = Array.isArray(mesh.material) ? newMaterials : newMaterials[0];
+      mesh.material = Array.isArray(mesh.material)
+        ? newMaterials
+        : newMaterials[0];
+
       mesh.castShadow = true;
       mesh.receiveShadow = true;
     };
@@ -387,7 +366,9 @@ return "light";
       const last = lastHighlightedRef.current;
       if (!last?.material) return;
 
-      const materials = Array.isArray(last.material) ? last.material : [last.material];
+      const materials = Array.isArray(last.material)
+        ? last.material
+        : [last.material];
 
       materials.forEach((mat) => {
         if (mat.userData?.originalColor) {
@@ -407,7 +388,9 @@ return "light";
       clearHighlight();
       if (!mesh?.material) return;
 
-      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const materials = Array.isArray(mesh.material)
+        ? mesh.material
+        : [mesh.material];
 
       materials.forEach((mat) => {
         if ("color" in mat) mat.color.setHex(0xff0000);
@@ -422,7 +405,9 @@ return "light";
 
     const restoreTransparency = () => {
       transparentObjectsRef.current.forEach(({ mesh, original }) => {
-        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        const materials = Array.isArray(mesh.material)
+          ? mesh.material
+          : [mesh.material];
 
         materials.forEach((mat, index) => {
           const item = original[index];
@@ -478,7 +463,14 @@ return "light";
 
     const fitCameraToObject = () => {
       restoreTransparency();
-
+ controls.enablePan = true;
+  controls.minDistance = 5;
+  controls.maxDistance = 500;
+  controls.maxPolarAngle = Math.PI * 0.95;
+controls.minPolarAngle = 0.2;
+controls.enableDamping = true;
+controls.enableZoom = true;
+controls.enableRotate = true;
       const box = new THREE.Box3().setFromObject(modelGroup);
       const size = box.getSize(new THREE.Vector3());
       const center = box.getCenter(new THREE.Vector3());
@@ -487,7 +479,11 @@ return "light";
       const distance = maxDim * 1.8;
 
       controls.target.set(center.x, center.y + size.y * 0.2, center.z);
-      camera.position.set(center.x, center.y + size.y * 0.45, center.z + distance);
+      camera.position.set(
+        center.x,
+        center.y + size.y * 0.45,
+        center.z + distance
+      );
       camera.lookAt(controls.target);
       controls.update();
 
@@ -495,18 +491,37 @@ return "light";
       selectedObjectRef.current = null;
     };
 
-    const insideView = () => {
-      makeWallTransparent();
+ const insideView = () => {
+  makeWallTransparent();
 
-      const box = new THREE.Box3().setFromObject(modelGroup);
-      const center = box.getCenter(new THREE.Vector3());
-      const size = box.getSize(new THREE.Vector3());
+  const box = new THREE.Box3().setFromObject(modelGroup);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
 
-      camera.position.set(center.x, center.y + Math.max(2, size.y * 0.25), center.z + 8);
-      controls.target.set(center.x, center.y + Math.max(1, size.y * 0.2), center.z);
-      camera.lookAt(controls.target);
-      controls.update();
-    };
+  // Camera room ke center ke andar
+  camera.position.set(
+    center.x,
+    center.y + size.y * 0.45,
+    center.z
+  );
+
+  // Orbit room ke center par hoga
+  controls.target.set(
+    center.x,
+    center.y + size.y * 0.45,
+    center.z - 1
+  );
+
+  // Sirf rotate, pan nahi
+  controls.enablePan = false;
+controls.minDistance = 1;
+camera.near = 0.5;
+camera.far = 5000;
+camera.updateProjectionMatrix();
+  controls.maxDistance = 2;
+
+  controls.update();
+};
 
     const moveCameraToMesh = (mesh) => {
       if (!mesh) return;
@@ -519,12 +534,11 @@ return "light";
 
       const distance = Math.max(6, Math.max(size.x, size.y, size.z) * 5);
 
-      camera.position.set(
-        center.x,
-        center.y + Math.max(2, size.y * 1.5),
-        center.z + distance
-      );
-
+camera.position.set(
+    center.x + distance,
+    center.y + 0.8,
+    center.z
+);
       controls.target.set(center.x, center.y + size.y * 0.3, center.z);
       camera.lookAt(controls.target);
       controls.update();
@@ -573,49 +587,30 @@ return "light";
         if (!child.isMesh) return;
 
         const originalName = cleanName(child.name);
-const manualAC =
-MANUAL_DEVICE_MESH_NAMES.ac.some(
-(item)=>
-item.toLowerCase()===
-originalName.toLowerCase()
-);
 
-const manualPanasonic =
-MANUAL_DEVICE_MESH_NAMES.panasonicAc.some(
-(item)=>
-item.toLowerCase()===
-originalName.toLowerCase()
-);
+        const manualAC = MANUAL_DEVICE_MESH_NAMES.ac.some(
+          (item) => item.toLowerCase() === originalName.toLowerCase()
+        );
 
-const redBeforeNormalize =
-isRedMesh(child);
+        const manualPanasonic = MANUAL_DEVICE_MESH_NAMES.panasonicAc.some(
+          (item) => item.toLowerCase() === originalName.toLowerCase()
+        );
 
-normalizeMeshMaterial(child);
+        const redBeforeNormalize = isRedMesh(child);
 
-if(manualPanasonic){
+        normalizeMeshMaterial(child);
 
-child.name="Panasonic AC";
+        if (manualPanasonic) {
+          child.name = "Panasonic AC";
+          meshMapRef.current.panasonicAc = child;
+          return;
+        }
 
-meshMapRef.current.panasonicAc=
-child;
-
-return;
-
-}
-
-if(
-manualAC||
-redBeforeNormalize
-){
-
-child.name="AC";
-
-meshMapRef.current.ac=
-child;
-
-return;
-
-}
+        if (manualAC || redBeforeNormalize) {
+          child.name = "AC";
+          meshMapRef.current.ac = child;
+          return;
+        }
 
         const lower = originalName.toLowerCase().replace(/\s+/g, "");
 
@@ -644,6 +639,7 @@ return;
 
       console.log("Device mesh map:", {
         ac: meshMapRef.current.ac?.name,
+        panasonicAc: meshMapRef.current.panasonicAc?.name,
         light: meshMapRef.current.light?.name,
         motion: meshMapRef.current.motion?.name,
         sensor: meshMapRef.current.sensor?.name,
@@ -673,85 +669,73 @@ return;
       const type = detectDeviceType(selected.name, selected);
       const data = latestDeviceDataRef.current;
 
-if (type === "ac") {
-  popupEl.style.pointerEvents = "none";
+      if (type === "ac") {
+        popupEl.innerHTML = `
+          <div style="font-weight:700;">AC</div>
+          <div>Status: ${data.ac || "OFF"} | ${data.acTemp || 24}°C</div>
+          <div style="font-size:11px; margin-top:4px;">Click AC object to toggle</div>
+        `;
 
-  popupEl.innerHTML = `
-    <div style="font-weight:700;">AC</div>
-    <div>Status: ${data.ac || "OFF"} | ${data.acTemp || 24}°C</div>
-    <div style="font-size:11px; margin-top:4px;">
-      Click red/green AC object to toggle
-    </div>
-  `;
+        popupEl.style.background = data.ac === "ON" ? "#dcfce7" : "#fee2e2";
+        popupEl.style.color = data.ac === "ON" ? "#166534" : "#991b1b";
+        popupEl.style.border =
+          data.ac === "ON" ? "1px solid #86efac" : "1px solid #fecaca";
+      } else if (type === "panasonicAc") {
+        popupEl.innerHTML = `
+          <div style="font-weight:700;">Panasonic AC</div>
+          <div>Status: ${data.panasonicAc || "OFF"} | ${
+          data.panasonicAcTemp || 24
+        }°C</div>
+          <div style="font-size:11px; margin-top:4px;">Click Panasonic AC to toggle</div>
+        `;
 
-  popupEl.style.background = data.ac === "ON" ? "#dcfce7" : "#fee2e2";
-  popupEl.style.color = data.ac === "ON" ? "#166534" : "#991b1b";
-  popupEl.style.border =
-    data.ac === "ON" ? "1px solid #86efac" : "1px solid #fecaca";
-} else if (type === "light") {
-  popupEl.style.pointerEvents = "none";
+        popupEl.style.background =
+          data.panasonicAc === "ON" ? "#dcfce7" : "#fee2e2";
+        popupEl.style.color =
+          data.panasonicAc === "ON" ? "#166534" : "#991b1b";
+        popupEl.style.border =
+          data.panasonicAc === "ON"
+            ? "1px solid #86efac"
+            : "1px solid #fecaca";
+      } else if (type === "light") {
+        popupEl.innerHTML = `Light<br/>Status: ${data.light || "OFF"}`;
+        popupEl.style.background = data.light === "ON" ? "#dcfce7" : "#fef3c7";
+        popupEl.style.color = data.light === "ON" ? "#166534" : "#92400e";
+        popupEl.style.border =
+          data.light === "ON" ? "1px solid #86efac" : "1px solid #fde68a";
+      } else {
+        popupEl.innerHTML = `Object<br/>${cleanName(selected.name)}`;
+        popupEl.style.background = "#ffffff";
+        popupEl.style.color = "#111827";
+        popupEl.style.border = "1px solid #d1d5db";
+      }
 
-  popupEl.innerHTML = `Light<br/>Status: ${data.light || "OFF"}`;
-  popupEl.style.background = data.light === "ON" ? "#dcfce7" : "#fef3c7";
-  popupEl.style.color = data.light === "ON" ? "#166534" : "#92400e";
-  popupEl.style.border =
-    data.light === "ON" ? "1px solid #86efac" : "1px solid #fde68a";
-} else {
-  popupEl.style.pointerEvents = "none";
-
-  popupEl.innerHTML = `Object<br/>${cleanName(selected.name)}`;
-  popupEl.style.background = "#ffffff";
-  popupEl.style.color = "#111827";
-  popupEl.style.border = "1px solid #d1d5db";
-}
-
-popupEl.style.left = `${x}px`;
-popupEl.style.top = `${y}px`;
-popupEl.style.transform = "translate(-50%, -120%)";
-popupEl.style.display = "block";
+      popupEl.style.left = `${x}px`;
+      popupEl.style.top = `${y}px`;
+      popupEl.style.transform = "translate(-50%, -120%)";
+      popupEl.style.display = "block";
     };
-const updateACObjectColor=()=>{
 
-const updateColor=(mesh,status)=>{
+    const updateACObjectColor = () => {
+      const updateColor = (mesh, status) => {
+        if (!mesh?.material) return;
 
-if(!mesh?.material)return;
+        const materials = Array.isArray(mesh.material)
+          ? mesh.material
+          : [mesh.material];
 
-const materials=
-Array.isArray(mesh.material)
-?
-mesh.material
-:
-[mesh.material];
+        materials.forEach((mat) => {
+          mat.color.set(status === "ON" ? "#22c55e" : "#ff0000");
+          mat.userData.originalColor = mat.color.clone();
+        });
+      };
 
-materials.forEach((mat)=>{
-
-mat.color.set(
-status==="ON"
-?
-"#22c55e"
-:
-"#ff0000"
-);
-
-mat.userData.originalColor=
-mat.color.clone();
-
-});
-
-};
-
-updateColor(
-meshMapRef.current.ac,
-latestDeviceDataRef.current.ac
-);
-
-updateColor(
-meshMapRef.current.panasonicAc,
-latestDeviceDataRef.current.panasonicAc
-);
-
-};
-
+      updateColor(meshMapRef.current.ac, latestDeviceDataRef.current.ac);
+      updateColor(
+        meshMapRef.current.panasonicAc,
+        latestDeviceDataRef.current.panasonicAc
+      );
+    };
 
     const handleCanvasClick = (event) => {
       const rect = renderer.domElement.getBoundingClientRect();
@@ -762,86 +746,38 @@ latestDeviceDataRef.current.panasonicAc
       raycaster.setFromCamera(mouse, camera);
 
       const intersects = raycaster.intersectObject(modelGroup, true);
-
       if (!intersects.length) return;
 
-const clickedMesh = intersects[0].object;
-const type = detectDeviceType(
-clickedMesh.name,
-clickedMesh
-);
+      const clickedMesh = intersects[0].object;
+      const type = detectDeviceType(clickedMesh.name, clickedMesh);
 
-if(type==="panasonicAc"){
+      if (type === "panasonicAc") {
+        const nextState =
+          latestDeviceDataRef.current.panasonicAc === "ON" ? "OFF" : "ON";
 
-const nextState=
+        controlPanasonicAC(nextState);
 
-latestDeviceDataRef.current
-.panasonicAc==="ON"
-?
-"OFF"
-:
-"ON";
+        selectedObjectRef.current = clickedMesh;
+        setSelectedName("Panasonic AC");
+        setSelectedControl("panasonicAc");
+        highlightMesh(clickedMesh);
+        return;
+      }
 
-controlPanasonicAC(
-nextState
-);
+      if (type === "ac") {
+        const nextState = latestDeviceDataRef.current.ac === "ON" ? "OFF" : "ON";
 
-selectedObjectRef.current=
-clickedMesh;
+        controlAC(nextState);
 
-setSelectedName(
-"Panasonic AC"
-);
+        selectedObjectRef.current = clickedMesh;
+        setSelectedName("AC");
+        setSelectedControl("ac");
+        highlightMesh(clickedMesh);
+        return;
+      }
 
-setSelectedControl(
-"panasonicAc"
-);
-
-highlightMesh(
-clickedMesh
-);
-
-return;
-}
-
-if(type==="ac"){
-
-const nextState=
-
-latestDeviceDataRef.current
-.ac==="ON"
-?
-"OFF"
-:
-"ON";
-
-controlAC(
-nextState
-);
-
-selectedObjectRef.current=
-clickedMesh;
-
-setSelectedName(
-"AC"
-);
-
-setSelectedControl(
-"ac"
-);
-
-highlightMesh(
-clickedMesh
-);
-
-return;
-}
       const label =
-        type === "ac"
-          ? "AC"
-          : type === "light"
-          ? "Light"
-          : cleanName(clickedMesh.name);
+        type === "light" ? "Light" : type ? type.toUpperCase() : cleanName(clickedMesh.name);
 
       selectedObjectRef.current = clickedMesh;
       setSelectedName(label);
@@ -877,35 +813,27 @@ return;
 
     loadModel();
 
-    const createButton = (text, left, onClick) => {
+    const createButton = (text, className, onClick) => {
       const button = document.createElement("button");
       button.innerText = text;
-      button.style.position = "absolute";
-      button.style.top = "20px";
-      button.style.left = left;
-      button.style.zIndex = "30";
-      button.style.padding = "8px 12px";
-      button.style.border = "1px solid #ccc";
-      button.style.background = "#fff";
-      button.style.cursor = "pointer";
-      button.style.borderRadius = "6px";
+      button.className = `viewer-floating-btn ${className}`;
       button.onclick = onClick;
       mount.appendChild(button);
       return button;
     };
 
-    const frontButton = createButton("Front View", "20px", () => {
+    const frontButton = createButton("Front View", "front-btn", () => {
       fitCameraToObject();
       clearHighlight();
       setSelectedName("None");
       setSelectedControl("");
     });
 
-    const insideButton = createButton("Inside View", "120px", () => {
+    const insideButton = createButton("Inside View", "inside-btn", () => {
       insideView();
     });
 
-    const resetButton = createButton("Reset", "225px", () => {
+    const resetButton = createButton("Reset", "reset-btn", () => {
       fitCameraToObject();
       clearHighlight();
       setSelectedName("None");
@@ -916,24 +844,29 @@ return;
 
     const animate = () => {
       animationId = requestAnimationFrame(animate);
-     controls.update();
-updateACObjectColor();
-updatePopup();
-renderer.render(scene, camera);
+      controls.update();
+      updateACObjectColor();
+      updatePopup();
+      renderer.render(scene, camera);
     };
 
     animate();
 
     const handleResize = () => {
+      if (!mount.clientWidth || !mount.clientHeight) return;
+
       camera.aspect = mount.clientWidth / mount.clientHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(mount.clientWidth, mount.clientHeight);
     };
 
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(mount);
     window.addEventListener("resize", handleResize);
 
     return () => {
       window.removeEventListener("resize", handleResize);
+      resizeObserver.disconnect();
       renderer.domElement.removeEventListener("click", handleCanvasClick);
 
       if (animationId) cancelAnimationFrame(animationId);
@@ -1014,7 +947,7 @@ renderer.render(scene, camera);
     },
     {
       id: "ac",
-      label: "AC",
+      label: "Mitsubishi AC",
       value: deviceData.ac,
       type: "ac",
     },
@@ -1024,97 +957,44 @@ renderer.render(scene, camera);
       value: `${deviceData.acTemp} °C`,
       type: "ac",
     },
+    {
+      id: "panasonicAc",
+      label: "Panasonic AC",
+      value: deviceData.panasonicAc,
+      type: "panasonicAc",
+    },
   ];
 
   return (
-    <div style={{ display: "flex", width: "100%", height: "100vh" }}>
-      <div
-        ref={mountRef}
-        style={{
-          flex: 1,
-          position: "relative",
-          overflow: "hidden",
-        }}
-      />
+    <div className="viewer-page">
+      <div ref={mountRef} className="viewer-3d" />
 
-      <div
-        style={{
-          width: "390px",
-          background: "#ffffff",
-          borderLeft: "1px solid #ddd",
-          padding: "20px",
-          fontFamily: "Arial, sans-serif",
-          overflowY: "auto",
-        }}
-      >
-        <h3 style={{ marginTop: 0 }}>Smart Room Panel</h3>
-
-        {/* {loadedFile && (
-          <div
-            style={{
-              marginBottom: "14px",
-              padding: "10px",
-              background: "#eef6ff",
-              border: "1px solid #cfe3ff",
-              borderRadius: "8px",
-              color: "#1d4ed8",
-              fontSize: "13px",
-            }}
-          >
-            Loaded file: {loadedFile}
+      <aside className="viewer-panel">
+        <div className="panel-header">
+          <div>
+            <h3>Smart Room Panel</h3>
+            <p>Live IoT Control Dashboard</p>
           </div>
-        )} */}
-
-        {loadError && (
-          <div
-            style={{
-              marginBottom: "14px",
-              padding: "10px",
-              background: "#fee2e2",
-              border: "1px solid #fecaca",
-              borderRadius: "8px",
-              color: "#991b1b",
-            }}
-          >
-            {loadError}
-          </div>
-        )}
-
-        <div
-          style={{
-            marginBottom: "14px",
-            padding: "10px",
-            background: "#eef6ff",
-            border: "1px solid #cfe3ff",
-            borderRadius: "8px",
-          }}
-        >
-          <strong>Selected:</strong> {selectedName || "None"}
         </div>
 
-        <div
-          style={{
-            marginBottom: "16px",
-            padding: "14px",
-            border: "1px solid #e5e7eb",
-            borderRadius: "14px",
-            background: "#f9fafb",
-          }}
-        >
-          <h4 style={{ marginTop: 0, marginBottom: "12px" }}>
-            Real-Time Device Data
-          </h4>
+        {loadedFile && <div className="info-box">3D model loaded</div>}
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: "10px",
-            }}
-          >
+        {loadError && <div className="error-box">{loadError}</div>}
+
+        <div className="selected-box">
+          <span>Selected</span>
+          <strong>{selectedName || "None"}</strong>
+        </div>
+
+        <div className="data-card">
+          <h4>Real-Time Device Data</h4>
+
+          <div className="device-grid">
             {devices.map((device) => (
-              <div
+              <button
                 key={device.id}
+                type="button"
+                className={`device-box ${device.type ? "clickable" : ""}`}
                 onClick={() => {
                   setSelectedName(device.label);
                   setSelectedControl(device.type);
@@ -1123,36 +1003,19 @@ renderer.render(scene, camera);
                     goToDevice(device.type);
                   } else {
                     selectedObjectRef.current = null;
-                    if (popupRef.current) popupRef.current.style.display = "none";
+                    if (popupRef.current) {
+                      popupRef.current.style.display = "none";
+                    }
                   }
                 }}
-                style={{
-                  padding: "12px",
-                  borderRadius: "12px",
-                  border: "1px solid #e5e7eb",
-                  background: "#ffffff",
-                  cursor: device.type ? "pointer" : "default",
-                }}
               >
-                <div style={{ fontSize: "12px", color: "#6b7280" }}>
-                  {device.label}
-                </div>
-
-                <div
-                  style={{
-                    marginTop: "6px",
-                    fontSize: "17px",
-                    fontWeight: 700,
-                    color: "#111827",
-                  }}
-                >
-                  {device.value}
-                </div>
-              </div>
+                <span>{device.label}</span>
+                <strong>{device.value}</strong>
+              </button>
             ))}
           </div>
 
-          <div style={{ marginTop: "12px", fontSize: "12px", color: "#6b7280" }}>
+          <div className="last-update">
             Last Update:{" "}
             {deviceData.updatedAt
               ? new Date(deviceData.updatedAt).toLocaleTimeString()
@@ -1161,35 +1024,19 @@ renderer.render(scene, camera);
         </div>
 
         {selectedControl === "light" && (
-          <div
-            style={{
-              marginBottom: "16px",
-              padding: "14px",
-              border: "1px solid #dbeafe",
-              borderRadius: "10px",
-              background: "#eff6ff",
-            }}
-          >
-            <h4 style={{ marginTop: 0 }}>Light Control</h4>
+          <div className="control-card light-card">
+            <h4>Light Control</h4>
 
             <p>
               Current Status: <strong>{deviceData.light}</strong>
             </p>
 
-            <div style={{ display: "flex", gap: "10px" }}>
-              <button
-                onClick={() => controlLight("ON")}
-                disabled={sending}
-                style={buttonStyle}
-              >
+            <div className="btn-row">
+              <button onClick={() => controlLight("ON")} disabled={sending}>
                 Light ON
               </button>
 
-              <button
-                onClick={() => controlLight("OFF")}
-                disabled={sending}
-                style={buttonStyle}
-              >
+              <button onClick={() => controlLight("OFF")} disabled={sending}>
                 Light OFF
               </button>
             </div>
@@ -1197,16 +1044,8 @@ renderer.render(scene, camera);
         )}
 
         {selectedControl === "ac" && (
-          <div
-            style={{
-              marginBottom: "16px",
-              padding: "14px",
-              border: "1px solid #dcfce7",
-              borderRadius: "10px",
-              background: "#f0fdf4",
-            }}
-          >
-            <h4 style={{ marginTop: 0 }}>Mitsubishi AC Control</h4>
+          <div className="control-card ac-card">
+            <h4>Mitsubishi AC Control</h4>
 
             <p>
               Current Status: <strong>{deviceData.ac}</strong>
@@ -1216,31 +1055,37 @@ renderer.render(scene, camera);
               Current Temp: <strong>{deviceData.acTemp} °C</strong>
             </p>
 
-            <div style={{ display: "flex", gap: "10px", marginBottom: "10px" }}>
-              <button
-                onClick={() => controlAC("ON")}
-                disabled={sending}
-                style={buttonStyle}
-              >
-                AC ON
-              </button>
+            <div className="btn-row">
+          <button
+  onClick={() => {
+    goToDevice("ac");
+    controlAC("ON");
+  }}
+  disabled={sending}
+>
+  AC ON
+</button>
 
-              <button
-                onClick={() => controlAC("OFF")}
-                disabled={sending}
-                style={buttonStyle}
-              >
-                AC OFF
-              </button>
+<button
+  onClick={() => {
+    goToDevice("ac");
+    controlAC("OFF");
+  }}
+  disabled={sending}
+>
+  AC OFF
+</button>
             </div>
 
-            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            <div className="temp-row">
               {[18, 20, 22, 24, 26].map((temp) => (
                 <button
                   key={temp}
-                  onClick={() => controlACTemp(temp)}
+                  onClick={() => {
+  goToDevice("ac");
+  controlACTemp(temp);
+}}
                   disabled={sending}
-                  style={smallButtonStyle}
                 >
                   {temp}°C
                 </button>
@@ -1249,21 +1094,40 @@ renderer.render(scene, camera);
           </div>
         )}
 
-        {controlMessage && (
-          <div
-            style={{
-              marginBottom: "14px",
-              padding: "10px",
-              background: "#f0fdf4",
-              border: "1px solid #bbf7d0",
-              borderRadius: "8px",
-              color: "#166534",
-            }}
-          >
-            {controlMessage}
+        {selectedControl === "panasonicAc" && (
+          <div className="control-card ac-card">
+            <h4>Panasonic AC Control</h4>
+
+            <p>
+              Current Status: <strong>{deviceData.panasonicAc}</strong>
+            </p>
+
+            <div className="btn-row">
+              <button
+           onClick={() => {
+  goToDevice("panasonicAc");
+  controlPanasonicAC("ON");
+}}
+                disabled={sending}
+              >
+                AC ON
+              </button>
+
+              <button
+               onClick={() => {
+  goToDevice("panasonicAc");
+  controlPanasonicAC("OFF");
+}}
+                disabled={sending}
+              >
+                AC OFF
+              </button>
+            </div>
           </div>
         )}
-      </div>
+
+        {controlMessage && <div className="success-box">{controlMessage}</div>}
+      </aside>
     </div>
   );
 }
