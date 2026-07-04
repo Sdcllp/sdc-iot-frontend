@@ -18,21 +18,24 @@ const SOCKET_URL = API_BASE_URL.replace(/\/api$/, "");
 const DEVICE_NAME_HINTS = {
   ac: ["ac", "airconditioner", "air_conditioner", "acunit", "ac_unit", "hvac"],
   light: ["light", "ceilinglight", "ceiling_light", "downlight", "lamp"],
+  temperature: ["temperature", "temp", "dht", "tempsensor", "temp_sensor"],
+  humidity: ["humidity", "humid", "humidsensor", "humidity_sensor"],
   motion: ["motion", "motionsensor", "motion_sensor", "pir"],
   sensor: ["sensor", "irsensor", "ir_sensor", "ir"],
   touch: ["touch", "touchsensor", "touch_sensor"],
   rfid: ["rfid", "rfidsensor", "rfid_sensor"],
+  ldr: ["ldr", "ldrsensor", "ldr_sensor", "lightdependentresistor"],
 };
 
 const MANUAL_DEVICE_MESH_NAMES = {
   ac: ["mesh 57", "mesh_57", "Mesh 57", "AC"],
-  panasonicAc: [
-    "Object mesh 6 1",
-    "mesh 6 1",
-    "mesh_6_1",
-    "Mesh 6 1",
-    "Panasonic AC",
-  ],
+  temperature: ["mesh 58", "mesh_58", "Mesh 58", "Object mesh 58", "Object mesh 58 1"],
+  humidity: ["mesh 30 1", "mesh_30_1", "Mesh 30 1", "Object mesh 30 1"],
+  light: ["mesh 45 1", "mesh_45_1", "Mesh 45 1", "Object mesh 45 1"],
+  ldr: ["mesh 6", "mesh_6", "Mesh 6", "Object mesh 6"],
+
+  // ✅ Motion Sensor - your selected object
+  motion: ["mesh 54", "mesh_54", "Mesh 54", "Object mesh 54"],
 };
 
 const cleanName = (name = "") => {
@@ -67,14 +70,9 @@ export default function Viewer() {
     light: "OFF",
     ac: "OFF",
     acTemp: 24,
-    panasonicAc: "OFF",
-    panasonicAcTemp: 24,
     updatedAt: null,
   });
 
-  const cameraRef = useRef(null);
-  const controlsRef = useRef(null);
-  const modelGroupRef = useRef(null);
   const meshMapRef = useRef({});
   const lastHighlightedRef = useRef(null);
   const transparentObjectsRef = useRef([]);
@@ -93,20 +91,8 @@ export default function Viewer() {
       reconnection: true,
     });
 
-    socket.on("connect", () => {
-      console.log("✅ Socket connected:", SOCKET_URL);
-    });
-
     socket.on("deviceData", (data) => {
       setDeviceData((prev) => ({ ...prev, ...data }));
-    });
-
-    socket.on("connect_error", (error) => {
-      console.error("❌ Socket error:", error.message);
-    });
-
-    socket.on("disconnect", () => {
-      console.log("❌ Socket disconnected");
     });
 
     return () => socket.disconnect();
@@ -114,20 +100,13 @@ export default function Viewer() {
 
   const getErrorMessage = (error, fallback) => {
     console.error(fallback, error.response?.data || error.message);
-
-    return (
-      error.response?.data?.message ||
-      error.response?.data?.error ||
-      error.message ||
-      fallback
-    );
+    return error.response?.data?.message || error.response?.data?.error || error.message || fallback;
   };
 
   const controlLight = async (state) => {
     try {
       setSending(true);
       setControlMessage("");
-
       const res = await axios.post(`${API_BASE_URL}/devices/light`, { state });
 
       if (res.data?.success) {
@@ -147,7 +126,6 @@ export default function Viewer() {
     try {
       setSending(true);
       setControlMessage("");
-
       const res = await axios.post(`${API_BASE_URL}/devices/ac`, { state });
 
       if (res.data?.success) {
@@ -163,35 +141,10 @@ export default function Viewer() {
     }
   };
 
-  const controlPanasonicAC = async (state) => {
-    try {
-      setSending(true);
-      setControlMessage("");
-
-      const res = await axios.post(`${API_BASE_URL}/devices/panasonic-ac`, {
-        state,
-      });
-
-      if (res.data?.success) {
-        setDeviceData((prev) => ({ ...prev, ...res.data.data }));
-        setControlMessage(res.data.message || `Panasonic AC ${state}`);
-      } else {
-        setControlMessage(res.data?.message || "Panasonic AC control failed");
-      }
-    } catch (error) {
-      setControlMessage(
-        getErrorMessage(error, "Failed to control Panasonic AC")
-      );
-    } finally {
-      setSending(false);
-    }
-  };
-
   const controlACTemp = async (temp) => {
     try {
       setSending(true);
       setControlMessage("");
-
       const res = await axios.post(`${API_BASE_URL}/devices/ac-temp`, { temp });
 
       if (res.data?.success) {
@@ -208,26 +161,23 @@ export default function Viewer() {
   };
 
   const detectDeviceType = (name = "", mesh = null) => {
-    const raw = cleanName(name).toLowerCase().replace(/\s+/g, "");
+    const cleaned = cleanName(name);
+    const raw = cleaned.toLowerCase().replace(/\s+/g, "");
 
     if (mesh && meshMapRef.current.ac === mesh) return "ac";
-    if (mesh && meshMapRef.current.panasonicAc === mesh) return "panasonicAc";
+    if (mesh && meshMapRef.current.temperature === mesh) return "temperature";
+    if (mesh && meshMapRef.current.humidity === mesh) return "humidity";
     if (mesh && meshMapRef.current.light === mesh) return "light";
+    if (mesh && meshMapRef.current.ldr === mesh) return "ldr";
+    if (mesh && meshMapRef.current.motion === mesh) return "motion";
+    if (mesh && meshMapRef.current.sensor === mesh) return "sensor";
+    if (mesh && meshMapRef.current.touch === mesh) return "touch";
+    if (mesh && meshMapRef.current.rfid === mesh) return "rfid";
 
-    if (
-      MANUAL_DEVICE_MESH_NAMES.ac.some(
-        (item) => item.toLowerCase() === cleanName(name).toLowerCase()
-      )
-    ) {
-      return "ac";
-    }
-
-    if (
-      MANUAL_DEVICE_MESH_NAMES.panasonicAc.some(
-        (item) => item.toLowerCase() === cleanName(name).toLowerCase()
-      )
-    ) {
-      return "panasonicAc";
+    for (const [type, names] of Object.entries(MANUAL_DEVICE_MESH_NAMES)) {
+      if (names.some((item) => item.toLowerCase() === cleaned.toLowerCase())) {
+        return type;
+      }
     }
 
     for (const [type, hints] of Object.entries(DEVICE_NAME_HINTS)) {
@@ -248,13 +198,6 @@ export default function Viewer() {
     }
 
     selectedObjectRef.current = mesh;
-    setSelectedName(
-      type === "panasonicAc"
-        ? "Panasonic AC"
-        : type === "ac"
-        ? "AC"
-        : type.toUpperCase()
-    );
     setSelectedControl(type);
     flyToMeshRef.current?.(mesh, type.toUpperCase());
   };
@@ -266,15 +209,8 @@ export default function Viewer() {
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0xf5f5f5);
 
-    const camera = new THREE.PerspectiveCamera(
-      60,
-      mount.clientWidth / mount.clientHeight,
-      0.1,
-      5000
-    );
-
+    const camera = new THREE.PerspectiveCamera(60, mount.clientWidth / mount.clientHeight, 0.1, 5000);
     camera.position.set(0, 18, 45);
-    cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -296,7 +232,6 @@ export default function Viewer() {
     controls.enableRotate = true;
     controls.minDistance = 1;
     controls.maxDistance = 500;
-    controlsRef.current = controls;
 
     scene.add(new THREE.AmbientLight(0xffffff, 1.8));
 
@@ -308,12 +243,11 @@ export default function Viewer() {
     directionalLight2.position.set(-40, 30, -30);
     scene.add(directionalLight2);
 
-  const gridHelper = new THREE.GridHelper(200, 50);
-scene.add(gridHelper);
+    const gridHelper = new THREE.GridHelper(200, 50);
+    scene.add(gridHelper);
 
     const modelGroup = new THREE.Group();
     scene.add(modelGroup);
-    modelGroupRef.current = modelGroup;
 
     const pivot = new THREE.Group();
     modelGroup.add(pivot);
@@ -326,10 +260,7 @@ scene.add(gridHelper);
 
     const isRedMesh = (mesh) => {
       if (!mesh?.material) return false;
-
-      const materials = Array.isArray(mesh.material)
-        ? mesh.material
-        : [mesh.material];
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 
       return materials.some((mat) => {
         if (!mat.color) return false;
@@ -340,9 +271,7 @@ scene.add(gridHelper);
     const normalizeMeshMaterial = (mesh) => {
       if (!mesh.isMesh || !mesh.material) return;
 
-      const oldMaterials = Array.isArray(mesh.material)
-        ? mesh.material
-        : [mesh.material];
+      const oldMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 
       const newMaterials = oldMaterials.map((mat) => {
         const newMat = new THREE.MeshStandardMaterial({
@@ -355,10 +284,7 @@ scene.add(gridHelper);
         return newMat;
       });
 
-      mesh.material = Array.isArray(mesh.material)
-        ? newMaterials
-        : newMaterials[0];
-
+      mesh.material = Array.isArray(mesh.material) ? newMaterials : newMaterials[0];
       mesh.castShadow = true;
       mesh.receiveShadow = true;
     };
@@ -367,9 +293,7 @@ scene.add(gridHelper);
       const last = lastHighlightedRef.current;
       if (!last?.material) return;
 
-      const materials = Array.isArray(last.material)
-        ? last.material
-        : [last.material];
+      const materials = Array.isArray(last.material) ? last.material : [last.material];
 
       materials.forEach((mat) => {
         if (mat.userData?.originalColor) {
@@ -389,14 +313,12 @@ scene.add(gridHelper);
       clearHighlight();
       if (!mesh?.material) return;
 
-      const materials = Array.isArray(mesh.material)
-        ? mesh.material
-        : [mesh.material];
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 
       materials.forEach((mat) => {
         if ("color" in mat) mat.color.setHex(0xffc107);
         if ("emissive" in mat) {
-          mat.color.setHex(0xffc107);
+          mat.emissive.setHex(0xffc107);
           mat.emissiveIntensity = 1.4;
         }
       });
@@ -406,9 +328,7 @@ scene.add(gridHelper);
 
     const restoreTransparency = () => {
       transparentObjectsRef.current.forEach(({ mesh, original }) => {
-        const materials = Array.isArray(mesh.material)
-          ? mesh.material
-          : [mesh.material];
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 
         materials.forEach((mat, index) => {
           const item = original[index];
@@ -442,9 +362,7 @@ scene.add(gridHelper);
 
         if (!isWallLike) return;
 
-        const materials = Array.isArray(child.material)
-          ? child.material
-          : [child.material];
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
 
         const original = materials.map((mat) => ({
           transparent: mat.transparent,
@@ -453,62 +371,73 @@ scene.add(gridHelper);
         }));
 
         materials.forEach((mat) => {
-       mat.transparent = true;
-mat.opacity = 0.18;
-mat.depthWrite = true;
-mat.polygonOffset = true;
-mat.polygonOffsetFactor = 1;
-mat.polygonOffsetUnits = 1;
+          mat.transparent = true;
+          mat.opacity = 0.18;
+          mat.depthWrite = true;
+          mat.polygonOffset = true;
+          mat.polygonOffsetFactor = 1;
+          mat.polygonOffsetUnits = 1;
         });
 
         transparentObjectsRef.current.push({ mesh: child, original });
       });
     };
+const fitCameraToObject = () => {
+  restoreTransparency();
+  gridHelper.visible = true;
 
-    const fitCameraToObject = () => {
-      restoreTransparency();
- controls.enablePan = true;
+  controls.enablePan = true;
+  controls.enableZoom = true;
+  controls.enableRotate = true;
   controls.minDistance = 5;
   controls.maxDistance = 500;
-  controls.maxPolarAngle = Math.PI * 0.95;
-controls.minPolarAngle = 0.2;
-controls.enableDamping = true;
-controls.enableZoom = true;
-controls.enableRotate = true;
-      const box = new THREE.Box3().setFromObject(modelGroup);
-      const size = box.getSize(new THREE.Vector3());
-      const center = box.getCenter(new THREE.Vector3());
 
-      const maxDim = Math.max(size.x, size.y, size.z) || 20;
-      const distance = maxDim * 1.8;
+  const box = new THREE.Box3().setFromObject(modelGroup);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
 
-      controls.target.set(center.x, center.y + size.y * 0.2, center.z);
-      camera.position.set(
-        center.x,
-        center.y + size.y * 0.45,
-        center.z + distance
-      );
-      camera.lookAt(controls.target);
-      controls.update();
+  const maxDim = Math.max(size.x, size.y, size.z) || 20;
+  const distance = maxDim * 1.45;
 
-      if (popupRef.current) popupRef.current.style.display = "none";
-      selectedObjectRef.current = null;
-    };
+  // ✅ Front View from X side
+  controls.target.set(
+    box.max.x,
+    center.y + size.y * 0.32,
+    center.z
+  );
 
-const insideView = () => {
+  camera.position.set(
+    box.max.x + distance,
+    center.y + size.y * 0.36,
+    center.z
+  );
+
+  camera.fov = 45;
+  camera.near = 0.1;
+  camera.far = 5000;
+  camera.updateProjectionMatrix();
+
+  camera.lookAt(controls.target);
+  controls.update();
+
+  if (popupRef.current) popupRef.current.style.display = "none";
+  selectedObjectRef.current = null;
+};
+   const insideView = () => {
   makeWallTransparent();
   gridHelper.visible = false;
 
   const box = new THREE.Box3().setFromObject(modelGroup);
-  const center = box.getCenter(new THREE.Vector3());
   const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
 
-  const eyeHeight = center.y + size.y * 0.35;
+  const eyeHeight = center.y + size.y * 0.32;
 
+  // ✅ INSIDE VIEW - camera room ke andar
   camera.position.set(
     center.x,
     eyeHeight,
-    center.z + size.z * 0.35
+    center.z + size.z * 0.18
   );
 
   controls.target.set(
@@ -526,7 +455,7 @@ const insideView = () => {
 
   camera.near = 0.01;
   camera.far = 5000;
-  camera.fov = 75;
+  camera.fov = 72;
   camera.updateProjectionMatrix();
 
   camera.lookAt(controls.target);
@@ -540,27 +469,84 @@ const insideView = () => {
       if (!mesh) return;
 
       makeWallTransparent();
+      gridHelper.visible = false;
+
+      const type = detectDeviceType(mesh.name, mesh);
 
       const box = new THREE.Box3().setFromObject(mesh);
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
 
+      if (type === "motion") {
+        camera.position.set(center.x + 1.5, center.y - 4, center.z + 3);
+        controls.target.set(center.x, center.y, center.z);
+        camera.lookAt(controls.target);
+        controls.update();
+        return;
+      }
+
+    if (type === "ldr") {
+  camera.position.set(center.x - 4.5, center.y + 1.2, center.z + 1.8);
+  controls.target.set(center.x, center.y, center.z);
+
+  camera.fov = 55;
+  camera.near = 0.1;
+  camera.far = 5000;
+  camera.updateProjectionMatrix();
+
+  camera.lookAt(controls.target);
+  controls.update();
+  return;
+}
+
+if (type === "humidity") {
+  camera.position.set(center.x + 2, center.y + 1, center.z + 2);
+  controls.target.set(center.x, center.y, center.z);
+  camera.lookAt(controls.target);
+  controls.update();
+  return;
+}
+
+      if (type === "light") {
+        camera.position.set(center.x, center.y - 4, center.z + 3);
+        controls.target.set(center.x, center.y, center.z);
+        camera.lookAt(controls.target);
+        controls.update();
+        return;
+      }
+
       const distance = Math.max(6, Math.max(size.x, size.y, size.z) * 5);
 
-camera.position.set(
-    center.x + distance,
-    center.y + 0.8,
-    center.z
-);
+      camera.position.set(center.x + distance, center.y + 0.8, center.z);
       controls.target.set(center.x, center.y + size.y * 0.3, center.z);
+
       camera.lookAt(controls.target);
       controls.update();
     };
 
     flyToMeshRef.current = (mesh, label = "") => {
       selectedObjectRef.current = mesh;
-      setSelectedName(label || cleanName(mesh?.name));
-      setSelectedControl(detectDeviceType(label || mesh?.name, mesh));
+
+      const type = detectDeviceType(label || mesh?.name, mesh);
+
+      const finalLabel =
+        type === "temperature"
+          ? "Temperature"
+          : type === "humidity"
+          ? "Humidity"
+          : type === "motion"
+          ? "Motion"
+          : type === "light"
+          ? "Light"
+          : type === "ldr"
+          ? "LDR"
+          : type === "ac"
+          ? "AC"
+          : label || cleanName(mesh?.name);
+
+      setSelectedName(finalLabel);
+      setSelectedControl(type);
+
       highlightMesh(mesh);
       moveCameraToMesh(mesh);
     };
@@ -589,8 +575,11 @@ camera.position.set(
 
       const candidates = {
         ac: [],
-        light: [],
+        temperature: [],
+        humidity: [],
         motion: [],
+        light: [],
+        ldr: [],
         sensor: [],
         touch: [],
         rfid: [],
@@ -605,23 +594,62 @@ camera.position.set(
           (item) => item.toLowerCase() === originalName.toLowerCase()
         );
 
-        const manualPanasonic = MANUAL_DEVICE_MESH_NAMES.panasonicAc.some(
+        const manualTemperature = MANUAL_DEVICE_MESH_NAMES.temperature.some(
+          (item) => item.toLowerCase() === originalName.toLowerCase()
+        );
+
+        const manualHumidity = MANUAL_DEVICE_MESH_NAMES.humidity.some(
+          (item) => item.toLowerCase() === originalName.toLowerCase()
+        );
+
+        const manualMotion = MANUAL_DEVICE_MESH_NAMES.motion.some(
+          (item) => item.toLowerCase() === originalName.toLowerCase()
+        );
+
+        const manualLight = MANUAL_DEVICE_MESH_NAMES.light.some(
+          (item) => item.toLowerCase() === originalName.toLowerCase()
+        );
+
+        const manualLDR = MANUAL_DEVICE_MESH_NAMES.ldr.some(
           (item) => item.toLowerCase() === originalName.toLowerCase()
         );
 
         const redBeforeNormalize = isRedMesh(child);
-
         normalizeMeshMaterial(child);
-
-        if (manualPanasonic) {
-          child.name = "Panasonic AC";
-          meshMapRef.current.panasonicAc = child;
-          return;
-        }
 
         if (manualAC || redBeforeNormalize) {
           child.name = "AC";
           meshMapRef.current.ac = child;
+          return;
+        }
+
+        if (manualTemperature) {
+          child.name = "Temperature Sensor";
+          meshMapRef.current.temperature = child;
+          return;
+        }
+
+        if (manualHumidity) {
+          child.name = "Humidity";
+          meshMapRef.current.humidity = child;
+          return;
+        }
+
+        if (manualMotion) {
+          child.name = "Motion Sensor";
+          meshMapRef.current.motion = child;
+          return;
+        }
+
+        if (manualLight) {
+          child.name = "Light";
+          meshMapRef.current.light = child;
+          return;
+        }
+
+        if (manualLDR) {
+          child.name = "LDR";
+          meshMapRef.current.ldr = child;
           return;
         }
 
@@ -644,20 +672,17 @@ camera.position.set(
 
       Object.keys(candidates).forEach((type) => {
         if (!meshMapRef.current[type] && candidates[type].length) {
-          meshMapRef.current[type] = candidates[type].sort(
-            (a, b) => b.score - a.score
-          )[0].mesh;
+          meshMapRef.current[type] = candidates[type].sort((a, b) => b.score - a.score)[0].mesh;
         }
       });
 
       console.log("Device mesh map:", {
         ac: meshMapRef.current.ac?.name,
-        panasonicAc: meshMapRef.current.panasonicAc?.name,
-        light: meshMapRef.current.light?.name,
+        temperature: meshMapRef.current.temperature?.name,
+        humidity: meshMapRef.current.humidity?.name,
         motion: meshMapRef.current.motion?.name,
-        sensor: meshMapRef.current.sensor?.name,
-        touch: meshMapRef.current.touch?.name,
-        rfid: meshMapRef.current.rfid?.name,
+        light: meshMapRef.current.light?.name,
+        ldr: meshMapRef.current.ldr?.name,
       });
     };
 
@@ -682,40 +707,63 @@ camera.position.set(
       const type = detectDeviceType(selected.name, selected);
       const data = latestDeviceDataRef.current;
 
-      if (type === "ac") {
+      if (type === "motion") {
+        popupEl.innerHTML = `
+          <div style="font-weight:700;">Motion Sensor</div>
+          <div>Status: ${data.motion || "--"}</div>
+          <div style="font-size:11px; margin-top:4px;">Object mesh 54</div>
+        `;
+        popupEl.style.background =
+          String(data.motion).toUpperCase() === "DETECTED" || String(data.motion).toUpperCase() === "ON"
+            ? "#dcfce7"
+            : "#ffffff";
+        popupEl.style.color =
+          String(data.motion).toUpperCase() === "DETECTED" || String(data.motion).toUpperCase() === "ON"
+            ? "#166534"
+            : "#111827";
+        popupEl.style.border = "1px solid #86efac";
+      } else if (type === "ac") {
         popupEl.innerHTML = `
           <div style="font-weight:700;">AC</div>
           <div>Status: ${data.ac || "OFF"} | ${data.acTemp || 24}°C</div>
           <div style="font-size:11px; margin-top:4px;">Click AC object to toggle</div>
         `;
-
         popupEl.style.background = data.ac === "ON" ? "#dcfce7" : "#fee2e2";
         popupEl.style.color = data.ac === "ON" ? "#166534" : "#991b1b";
-        popupEl.style.border =
-          data.ac === "ON" ? "1px solid #86efac" : "1px solid #fecaca";
-      } else if (type === "panasonicAc") {
+        popupEl.style.border = data.ac === "ON" ? "1px solid #86efac" : "1px solid #fecaca";
+      } else if (type === "temperature") {
         popupEl.innerHTML = `
-          <div style="font-weight:700;">Panasonic AC</div>
-          <div>Status: ${data.panasonicAc || "OFF"} | ${
-          data.panasonicAcTemp || 24
-        }°C</div>
-          <div style="font-size:11px; margin-top:4px;">Click Panasonic AC to toggle</div>
+          <div style="font-weight:700;">Temperature</div>
+          <div>${data.temperature || "--"} °C</div>
         `;
-
-        popupEl.style.background =
-          data.panasonicAc === "ON" ? "#dcfce7" : "#fee2e2";
-        popupEl.style.color =
-          data.panasonicAc === "ON" ? "#166534" : "#991b1b";
-        popupEl.style.border =
-          data.panasonicAc === "ON"
-            ? "1px solid #86efac"
-            : "1px solid #fecaca";
+        popupEl.style.background = "#e0f2fe";
+        popupEl.style.color = "#075985";
+        popupEl.style.border = "1px solid #7dd3fc";
+      } else if (type === "humidity") {
+        popupEl.innerHTML = `
+          <div style="font-weight:700;">Humidity</div>
+          <div>${data.humidity || "--"} %</div>
+        `;
+        popupEl.style.background = "#dbeafe";
+        popupEl.style.color = "#1e3a8a";
+        popupEl.style.border = "1px solid #93c5fd";
       } else if (type === "light") {
-        popupEl.innerHTML = `Light<br/>Status: ${data.light || "OFF"}`;
+        popupEl.innerHTML = `
+          <div style="font-weight:700;">Light</div>
+          <div>Status: ${data.light || "OFF"}</div>
+          <div style="font-size:11px; margin-top:4px;">Click light object to toggle</div>
+        `;
         popupEl.style.background = data.light === "ON" ? "#dcfce7" : "#fef3c7";
         popupEl.style.color = data.light === "ON" ? "#166534" : "#92400e";
-        popupEl.style.border =
-          data.light === "ON" ? "1px solid #86efac" : "1px solid #fde68a";
+        popupEl.style.border = data.light === "ON" ? "1px solid #86efac" : "1px solid #fde68a";
+      } else if (type === "ldr") {
+        popupEl.innerHTML = `
+          <div style="font-weight:700;">LDR Sensor</div>
+          <div>Value : ${data.ldr || "--"}</div>
+        `;
+        popupEl.style.background = "#e0f2fe";
+        popupEl.style.color = "#075985";
+        popupEl.style.border = "1px solid #7dd3fc";
       } else {
         popupEl.innerHTML = `Object<br/>${cleanName(selected.name)}`;
         popupEl.style.background = "#ffffff";
@@ -729,13 +777,11 @@ camera.position.set(
       popupEl.style.display = "block";
     };
 
-    const updateACObjectColor = () => {
+    const updateDeviceObjectColors = () => {
       const updateColor = (mesh, status) => {
         if (!mesh?.material) return;
 
-        const materials = Array.isArray(mesh.material)
-          ? mesh.material
-          : [mesh.material];
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 
         materials.forEach((mat) => {
           mat.color.set(status === "ON" ? "#22c55e" : "#ff0000");
@@ -744,10 +790,7 @@ camera.position.set(
       };
 
       updateColor(meshMapRef.current.ac, latestDeviceDataRef.current.ac);
-      updateColor(
-        meshMapRef.current.panasonicAc,
-        latestDeviceDataRef.current.panasonicAc
-      );
+      updateColor(meshMapRef.current.light, latestDeviceDataRef.current.light);
     };
 
     const handleCanvasClick = (event) => {
@@ -764,35 +807,58 @@ camera.position.set(
       const clickedMesh = intersects[0].object;
       const type = detectDeviceType(clickedMesh.name, clickedMesh);
 
-      if (type === "panasonicAc") {
-        const nextState =
-          latestDeviceDataRef.current.panasonicAc === "ON" ? "OFF" : "ON";
-
-        controlPanasonicAC(nextState);
-
-        selectedObjectRef.current = clickedMesh;
-        setSelectedName("Panasonic AC");
-        setSelectedControl("panasonicAc");
-        highlightMesh(clickedMesh);
-        return;
-      }
+      selectedObjectRef.current = clickedMesh;
 
       if (type === "ac") {
         const nextState = latestDeviceDataRef.current.ac === "ON" ? "OFF" : "ON";
-
         controlAC(nextState);
-
-        selectedObjectRef.current = clickedMesh;
         setSelectedName("AC");
         setSelectedControl("ac");
         highlightMesh(clickedMesh);
         return;
       }
 
-      const label =
-        type === "light" ? "Light" : type ? type.toUpperCase() : cleanName(clickedMesh.name);
+      if (type === "light") {
+        const nextState = latestDeviceDataRef.current.light === "ON" ? "OFF" : "ON";
+        controlLight(nextState);
+        setSelectedName("Light");
+        setSelectedControl("light");
+        highlightMesh(clickedMesh);
+        return;
+      }
 
-      selectedObjectRef.current = clickedMesh;
+      if (type === "motion") {
+        setSelectedName("Motion");
+        setSelectedControl("motion");
+        highlightMesh(clickedMesh);
+        moveCameraToMesh(clickedMesh);
+        return;
+      }
+
+      if (type === "temperature") {
+        setSelectedName("Temperature");
+        setSelectedControl("temperature");
+        highlightMesh(clickedMesh);
+        return;
+      }
+
+      if (type === "humidity") {
+        setSelectedName("Humidity");
+        setSelectedControl("humidity");
+        highlightMesh(clickedMesh);
+        return;
+      }
+
+ if (type === "ldr") {
+  setSelectedName("LDR");
+  setSelectedControl("ldr");
+  highlightMesh(clickedMesh);
+  moveCameraToMesh(clickedMesh);
+  return;
+}
+
+      const label = type ? type.toUpperCase() : cleanName(clickedMesh.name);
+
       setSelectedName(label);
       setSelectedControl(type);
       highlightMesh(clickedMesh);
@@ -817,9 +883,7 @@ camera.position.set(
         undefined,
         (error) => {
           console.error("Failed to load GLTF:", error);
-          setLoadError(
-            "GLTF file load failed. Put smartroomapp.gltf and linked files in public/models."
-          );
+          setLoadError("GLTF file load failed. Put smartroomapp.gltf and linked files in public/models.");
         }
       );
     };
@@ -858,7 +922,7 @@ camera.position.set(
     const animate = () => {
       animationId = requestAnimationFrame(animate);
       controls.update();
-      updateACObjectColor();
+      updateDeviceObjectColors();
       updatePopup();
       renderer.render(scene, camera);
     };
@@ -902,7 +966,6 @@ camera.position.set(
         mount.removeChild(renderer.domElement);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const devices = [
@@ -910,13 +973,13 @@ camera.position.set(
       id: "temperature",
       label: "Temperature",
       value: `${deviceData.temperature} °C`,
-      type: "ac",
+      type: "temperature",
     },
     {
       id: "humidity",
       label: "Humidity",
       value: `${deviceData.humidity} %`,
-      type: "",
+      type: "humidity",
     },
     {
       id: "motion",
@@ -934,7 +997,7 @@ camera.position.set(
       id: "ldr",
       label: "LDR",
       value: deviceData.ldr,
-      type: "light",
+      type: "ldr",
     },
     {
       id: "ir",
@@ -972,12 +1035,6 @@ camera.position.set(
       value: `${deviceData.acTemp} °C`,
       type: "ac",
     },
-    {
-      id: "panasonicAc",
-      label: "Panasonic AC",
-      value: deviceData.panasonicAc,
-      type: "panasonicAc",
-    },
   ];
 
   return (
@@ -993,7 +1050,6 @@ camera.position.set(
         </div>
 
         {loadedFile && <div className="info-box">3D model loaded</div>}
-
         {loadError && <div className="error-box">{loadError}</div>}
 
         <div className="selected-box">
@@ -1018,9 +1074,7 @@ camera.position.set(
                     goToDevice(device.type);
                   } else {
                     selectedObjectRef.current = null;
-                    if (popupRef.current) {
-                      popupRef.current.style.display = "none";
-                    }
+                    if (popupRef.current) popupRef.current.style.display = "none";
                   }
                 }}
               >
@@ -1032,26 +1086,72 @@ camera.position.set(
 
           <div className="last-update">
             Last Update:{" "}
-            {deviceData.updatedAt
-              ? new Date(deviceData.updatedAt).toLocaleTimeString()
-              : "--"}
+            {deviceData.updatedAt ? new Date(deviceData.updatedAt).toLocaleTimeString() : "--"}
           </div>
         </div>
+
+        {selectedControl === "temperature" && (
+          <div className="control-card">
+            <h4>Temperature Sensor</h4>
+            <p>
+              Current Temperature: <strong>{deviceData.temperature} °C</strong>
+            </p>
+          </div>
+        )}
+
+        {selectedControl === "humidity" && (
+          <div className="control-card">
+            <h4>Humidity Sensor</h4>
+            <p>
+              Current Humidity: <strong>{deviceData.humidity} %</strong>
+            </p>
+          </div>
+        )}
+
+        {selectedControl === "motion" && (
+          <div className="control-card">
+            <h4>Motion Sensor</h4>
+            <p>
+              Current Motion: <strong>{deviceData.motion}</strong>
+            </p>
+            <p>Object: mesh 54</p>
+          </div>
+        )}
+
+        {selectedControl === "ldr" && (
+          <div className="control-card">
+            <h4>LDR Sensor</h4>
+            <p>
+              Current LDR Value: <strong>{deviceData.ldr}</strong>
+            </p>
+          </div>
+        )}
 
         {selectedControl === "light" && (
           <div className="control-card light-card">
             <h4>Light Control</h4>
-
             <p>
               Current Status: <strong>{deviceData.light}</strong>
             </p>
 
             <div className="btn-row">
-              <button onClick={() => controlLight("ON")} disabled={sending}>
+              <button
+                onClick={() => {
+                  goToDevice("light");
+                  controlLight("ON");
+                }}
+                disabled={sending}
+              >
                 Light ON
               </button>
 
-              <button onClick={() => controlLight("OFF")} disabled={sending}>
+              <button
+                onClick={() => {
+                  goToDevice("light");
+                  controlLight("OFF");
+                }}
+                disabled={sending}
+              >
                 Light OFF
               </button>
             </div>
@@ -1061,35 +1161,33 @@ camera.position.set(
         {selectedControl === "ac" && (
           <div className="control-card ac-card">
             <h4>Mitsubishi AC Control</h4>
-
             <p>
               Current Status: <strong>{deviceData.ac}</strong>
             </p>
-
             <p>
               Current Temp: <strong>{deviceData.acTemp} °C</strong>
             </p>
 
             <div className="btn-row">
-          <button
-  onClick={() => {
-    goToDevice("ac");
-    controlAC("ON");
-  }}
-  disabled={sending}
->
-  AC ON
-</button>
+              <button
+                onClick={() => {
+                  goToDevice("ac");
+                  controlAC("ON");
+                }}
+                disabled={sending}
+              >
+                AC ON
+              </button>
 
-<button
-  onClick={() => {
-    goToDevice("ac");
-    controlAC("OFF");
-  }}
-  disabled={sending}
->
-  AC OFF
-</button>
+              <button
+                onClick={() => {
+                  goToDevice("ac");
+                  controlAC("OFF");
+                }}
+                disabled={sending}
+              >
+                AC OFF
+              </button>
             </div>
 
             <div className="temp-row">
@@ -1097,46 +1195,14 @@ camera.position.set(
                 <button
                   key={temp}
                   onClick={() => {
-  goToDevice("ac");
-  controlACTemp(temp);
-}}
+                    goToDevice("ac");
+                    controlACTemp(temp);
+                  }}
                   disabled={sending}
                 >
                   {temp}°C
                 </button>
               ))}
-            </div>
-          </div>
-        )}
-
-        {selectedControl === "panasonicAc" && (
-          <div className="control-card ac-card">
-            <h4>Panasonic AC Control</h4>
-
-            <p>
-              Current Status: <strong>{deviceData.panasonicAc}</strong>
-            </p>
-
-            <div className="btn-row">
-              <button
-           onClick={() => {
-  goToDevice("panasonicAc");
-  controlPanasonicAC("ON");
-}}
-                disabled={sending}
-              >
-                AC ON
-              </button>
-
-              <button
-               onClick={() => {
-  goToDevice("panasonicAc");
-  controlPanasonicAC("OFF");
-}}
-                disabled={sending}
-              >
-                AC OFF
-              </button>
             </div>
           </div>
         )}
