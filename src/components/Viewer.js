@@ -96,7 +96,8 @@ export default function Viewer() {
     });
 
     return () => socket.disconnect();
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
 
   const getErrorMessage = (error, fallback) => {
     console.error(fallback, error.response?.data || error.message);
@@ -966,7 +967,9 @@ if (type === "humidity") {
         mount.removeChild(renderer.domElement);
       }
     };
-  }, []);
+   
+}, []);
+
 
   const devices = [
     {
