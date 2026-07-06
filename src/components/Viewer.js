@@ -365,7 +365,9 @@ const restoreTransparency = () => {
 
   transparentObjectsRef.current = [];
 };
-    const makeWallTransparent = () => {
+// eslint-disable-next-line no-unused-vars
+    const _makeWallTransparent = () => {
+      
       restoreTransparency();
 
       modelGroup.traverse((child) => {
@@ -559,23 +561,59 @@ controls.enableZoom = false; // Orbit zoom off rakho
     controls.update();
     return;
   }
-// ✅ Motion special camera: sensor clearly visible
-if (type === "motion") {
-  const viewDistance = Math.max(6, roomSize.z * 0.35);
 
+  // ✅ Motion special camera: sensor clearly visible
+  if (type === "motion") {
+    const viewDistance = Math.max(6, roomSize.z * 0.35);
+
+    camera.position.set(
+      center.x + 4,
+      center.y - 3.2,
+      center.z + viewDistance
+    );
+
+    controls.target.set(
+      center.x,
+      center.y - 0.25,
+      center.z
+    );
+
+    camera.fov = 70;
+    camera.near = 0.01;
+    camera.far = 5000;
+    camera.updateProjectionMatrix();
+
+    controls.enableRotate = true;
+    controls.enableZoom = true;
+    controls.enablePan = true;
+    controls.minDistance = 1;
+    controls.maxDistance = 80;
+
+    camera.lookAt(controls.target);
+    controls.update();
+    return;
+  }
+
+  // ✅ LDR special camera: door/front wall ke saamne se dikhane ke liye
+// ✅ LDR - Front View (Door side)
+if (type === "ldr") {
+
+  const box = new THREE.Box3().setFromObject(modelGroup);
+
+  // Front wall ke bahar camera
   camera.position.set(
-    center.x + 4,
-    center.y - 3.2,
-    center.z + viewDistance
+    box.max.x + 8,      // Front side
+    center.y + 1.2,
+    center.z
   );
 
   controls.target.set(
     center.x,
-    center.y - 0.25,
+    center.y,
     center.z
   );
 
-  camera.fov = 70;
+  camera.fov = 42;
   camera.near = 0.01;
   camera.far = 5000;
   camera.updateProjectionMatrix();
@@ -583,13 +621,16 @@ if (type === "motion") {
   controls.enableRotate = true;
   controls.enableZoom = true;
   controls.enablePan = true;
-  controls.minDistance = 1;
-  controls.maxDistance = 80;
+
+  controls.minDistance = 2;
+  controls.maxDistance = 100;
 
   camera.lookAt(controls.target);
   controls.update();
+
   return;
 }
+
   const maxMeshSize = Math.max(size.x, size.y, size.z) || 1;
   const distance = Math.max(8, maxMeshSize * 18);
   const eyeHeight = center.y + Math.max(1.2, size.y * 2);
@@ -1377,3 +1418,4 @@ const devices = [
     </div>
   );
 }
+
