@@ -233,7 +233,24 @@ export default function Viewer() {
     controls.enableRotate = true;
     controls.minDistance = 1;
     controls.maxDistance = 500;
+controls.enableDamping = true;
+controls.enableRotate = true;
+controls.enableZoom = true;
+controls.enablePan = true;
 
+controls.rotateSpeed = 0.8;
+controls.zoomSpeed = 1.2;
+controls.panSpeed = 0.8;
+
+controls.minDistance = 0.001;
+controls.maxDistance = 500;
+
+controls.enablePan = true;
+controls.enableZoom = true;
+controls.enableRotate = true;
+
+controls.target.set(0,0,0);
+controls.maxDistance = 100;
     scene.add(new THREE.AmbientLight(0xffffff, 1.8));
 
     const directionalLight1 = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -258,7 +275,8 @@ export default function Viewer() {
     const mouse = new THREE.Vector2();
 
     let animationId = null;
-
+let isInsideMode = false;
+let insideBox = null;
     const isRedMesh = (mesh) => {
       if (!mesh?.material) return false;
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -326,24 +344,27 @@ export default function Viewer() {
 
       lastHighlightedRef.current = mesh;
     };
+const restoreTransparency = () => {
+  transparentObjectsRef.current.forEach(({ mesh, original }) => {
+    if (!mesh) return;
 
-    const restoreTransparency = () => {
-      transparentObjectsRef.current.forEach(({ mesh, original }) => {
-        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    mesh.visible = original.visible;
 
-        materials.forEach((mat, index) => {
-          const item = original[index];
-          if (!item) return;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 
-          mat.transparent = item.transparent;
-          mat.opacity = item.opacity;
-          mat.depthWrite = item.depthWrite;
-        });
-      });
+    materials.forEach((mat, index) => {
+      const item = original.materials?.[index];
+      if (!item) return;
 
-      transparentObjectsRef.current = [];
-    };
+      mat.transparent = item.transparent;
+      mat.opacity = item.opacity;
+      mat.depthWrite = item.depthWrite;
+      mat.side = item.side;
+    });
+  });
 
+  transparentObjectsRef.current = [];
+};
     const makeWallTransparent = () => {
       restoreTransparency();
 
@@ -365,16 +386,20 @@ export default function Viewer() {
 
         const materials = Array.isArray(child.material) ? child.material : [child.material];
 
-        const original = materials.map((mat) => ({
-          transparent: mat.transparent,
-          opacity: mat.opacity,
-          depthWrite: mat.depthWrite,
-        }));
+   const original = {
+  visible: child.visible,
+  materials: materials.map((mat) => ({
+    transparent: mat.transparent,
+    opacity: mat.opacity,
+    depthWrite: mat.depthWrite,
+    side: mat.side,
+  })),
+};
 
         materials.forEach((mat) => {
           mat.transparent = true;
-          mat.opacity = 0.18;
-          mat.depthWrite = true;
+     mat.opacity = 0.03;
+       mat.depthWrite = false;
           mat.polygonOffset = true;
           mat.polygonOffsetFactor = 1;
           mat.polygonOffsetUnits = 1;
@@ -384,6 +409,11 @@ export default function Viewer() {
       });
     };
 const fitCameraToObject = () => {
+  isInsideMode = false;
+  insideBox = null;
+
+  restoreTransparency();
+  gridHelper.visible = true;
   restoreTransparency();
   gridHelper.visible = true;
 
@@ -424,106 +454,172 @@ const fitCameraToObject = () => {
   if (popupRef.current) popupRef.current.style.display = "none";
   selectedObjectRef.current = null;
 };
-   const insideView = () => {
-  makeWallTransparent();
+const insideView = () => {
+  restoreTransparency();
   gridHelper.visible = false;
 
   const box = new THREE.Box3().setFromObject(modelGroup);
   const size = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
 
-  const eyeHeight = center.y + size.y * 0.32;
+  isInsideMode = true;
+  insideBox = box.clone();
 
-  // ✅ INSIDE VIEW - camera room ke andar
+  // Room ke andar wall visible rahe
+  modelGroup.traverse((child) => {
+    if (!child.isMesh || !child.material) return;
+
+    const materials = Array.isArray(child.material) ? child.material : [child.material];
+
+    materials.forEach((mat) => {
+      mat.side = THREE.DoubleSide;
+      mat.transparent = false;
+      mat.opacity = 1;
+      mat.depthWrite = true;
+    });
+  });
+
+  const eyeHeight = center.y + size.y * 0.18;
+
   camera.position.set(
     center.x,
     eyeHeight,
-    center.z + size.z * 0.18
+    center.z + size.z * 0.15
   );
 
   controls.target.set(
     center.x,
     eyeHeight,
-    center.z - size.z * 0.45
+    center.z - 0.01
   );
 
-  controls.enablePan = true;
-  controls.enableZoom = true;
-  controls.enableRotate = true;
-
-  controls.minDistance = 0.5;
-  controls.maxDistance = Math.max(size.x, size.z) * 1.2;
-
+  camera.fov = 80;
   camera.near = 0.01;
   camera.far = 5000;
-  camera.fov = 72;
   camera.updateProjectionMatrix();
 
-  camera.lookAt(controls.target);
+  // Important: room se bahar na jaye
+  controls.enableRotate = true;
+controls.enableZoom = false; // Orbit zoom off rakho
+  controls.enablePan = false;
+
+  controls.minDistance = 0.01;
+  controls.maxDistance = 0.01;
+
+  controls.rotateSpeed = 0.6;
+
   controls.update();
 
-  if (popupRef.current) popupRef.current.style.display = "none";
   selectedObjectRef.current = null;
+  if (popupRef.current) popupRef.current.style.display = "none";
 };
+  const moveCameraToMesh = (mesh) => {
+  if (!mesh) return;
 
-    const moveCameraToMesh = (mesh) => {
-      if (!mesh) return;
+  restoreTransparency();
+  gridHelper.visible = false;
 
-      makeWallTransparent();
-      gridHelper.visible = false;
+  const type = detectDeviceType(mesh.name, mesh);
 
-      const type = detectDeviceType(mesh.name, mesh);
+  const roomBox = new THREE.Box3().setFromObject(modelGroup);
+  const roomSize = roomBox.getSize(new THREE.Vector3());
 
-      const box = new THREE.Box3().setFromObject(mesh);
-      const center = box.getCenter(new THREE.Vector3());
-      const size = box.getSize(new THREE.Vector3());
+  const box = new THREE.Box3().setFromObject(mesh);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
 
-      if (type === "motion") {
-        camera.position.set(center.x + 1.5, center.y - 4, center.z + 3);
-        controls.target.set(center.x, center.y, center.z);
-        camera.lookAt(controls.target);
-        controls.update();
-        return;
-      }
+  // ✅ Light special camera: room + light dono dikhne ke liye
+  if (type === "light") {
+    const viewDistance = Math.max(7, roomSize.z * 0.45);
 
-    if (type === "ldr") {
-  camera.position.set(center.x - 4.5, center.y + 1.2, center.z + 1.8);
-  controls.target.set(center.x, center.y, center.z);
+    camera.position.set(
+      center.x + 5,
+      center.y - 3.5,
+      center.z + viewDistance
+    );
 
-  camera.fov = 55;
-  camera.near = 0.1;
+    controls.target.set(
+      center.x,
+      center.y - 0.35,
+      center.z
+    );
+
+    camera.fov = 72;
+    camera.near = 0.01;
+    camera.far = 5000;
+    camera.updateProjectionMatrix();
+
+    controls.enableRotate = true;
+    controls.enableZoom = true;
+    controls.enablePan = true;
+    controls.minDistance = 1;
+    controls.maxDistance = 90;
+
+    camera.lookAt(controls.target);
+    controls.update();
+    return;
+  }
+// ✅ Motion special camera: sensor clearly visible
+if (type === "motion") {
+  const viewDistance = Math.max(6, roomSize.z * 0.35);
+
+  camera.position.set(
+    center.x + 4,
+    center.y - 3.2,
+    center.z + viewDistance
+  );
+
+  controls.target.set(
+    center.x,
+    center.y - 0.25,
+    center.z
+  );
+
+  camera.fov = 70;
+  camera.near = 0.01;
   camera.far = 5000;
   camera.updateProjectionMatrix();
 
+  controls.enableRotate = true;
+  controls.enableZoom = true;
+  controls.enablePan = true;
+  controls.minDistance = 1;
+  controls.maxDistance = 80;
+
   camera.lookAt(controls.target);
   controls.update();
   return;
 }
+  const maxMeshSize = Math.max(size.x, size.y, size.z) || 1;
+  const distance = Math.max(8, maxMeshSize * 18);
+  const eyeHeight = center.y + Math.max(1.2, size.y * 2);
 
-if (type === "humidity") {
-  camera.position.set(center.x + 2, center.y + 1, center.z + 2);
-  controls.target.set(center.x, center.y, center.z);
+  camera.position.set(
+    center.x + distance,
+    eyeHeight,
+    center.z + distance * 0.7
+  );
+
+  controls.target.set(
+    center.x,
+    center.y + size.y * 0.4,
+    center.z
+  );
+
+  camera.fov = 45;
+  camera.near = 0.01;
+  camera.far = 5000;
+  camera.updateProjectionMatrix();
+
+  controls.enableRotate = true;
+  controls.enableZoom = true;
+  controls.enablePan = true;
+  controls.minDistance = 2;
+  controls.maxDistance = Math.max(30, roomSize.length());
+
   camera.lookAt(controls.target);
   controls.update();
-  return;
-}
-
-      if (type === "light") {
-        camera.position.set(center.x, center.y - 4, center.z + 3);
-        controls.target.set(center.x, center.y, center.z);
-        camera.lookAt(controls.target);
-        controls.update();
-        return;
-      }
-
-      const distance = Math.max(6, Math.max(size.x, size.y, size.z) * 5);
-
-      camera.position.set(center.x + distance, center.y + 0.8, center.z);
-      controls.target.set(center.x, center.y + size.y * 0.3, center.z);
-
-      camera.lookAt(controls.target);
-      controls.update();
-    };
+};
 
     flyToMeshRef.current = (mesh, label = "") => {
       selectedObjectRef.current = mesh;
@@ -802,10 +898,23 @@ if (type === "humidity") {
 
       raycaster.setFromCamera(mouse, camera);
 
-      const intersects = raycaster.intersectObject(modelGroup, true);
-      if (!intersects.length) return;
+   const intersects = raycaster.intersectObject(modelGroup, true);
 
-      const clickedMesh = intersects[0].object;
+if (!intersects.length) return;
+
+// Sirf registered IoT device meshes hi select honge
+const allowedMeshes = Object.values(meshMapRef.current).filter(Boolean);
+
+const clicked = intersects.find((hit) =>
+  allowedMeshes.includes(hit.object)
+);
+
+if (!clicked) {
+  // Agar wall, floor, chair ya koi aur mesh click hua to ignore
+  return;
+}
+
+const clickedMesh = clicked.object;
       const type = detectDeviceType(clickedMesh.name, clickedMesh);
 
       selectedObjectRef.current = clickedMesh;
@@ -825,8 +934,11 @@ if (type === "humidity") {
         setSelectedName("Light");
         setSelectedControl("light");
         highlightMesh(clickedMesh);
+        moveCameraToMesh(clickedMesh);
         return;
       }
+
+
 
       if (type === "motion") {
         setSelectedName("Motion");
@@ -836,19 +948,21 @@ if (type === "humidity") {
         return;
       }
 
-      if (type === "temperature") {
-        setSelectedName("Temperature");
-        setSelectedControl("temperature");
-        highlightMesh(clickedMesh);
-        return;
-      }
+  if (type === "temperature") {
+  setSelectedName("Temperature");
+  setSelectedControl("temperature");
+  highlightMesh(clickedMesh);
+  moveCameraToMesh(clickedMesh);
+  return;
+}
 
-      if (type === "humidity") {
-        setSelectedName("Humidity");
-        setSelectedControl("humidity");
-        highlightMesh(clickedMesh);
-        return;
-      }
+  if (type === "humidity") {
+  setSelectedName("Humidity");
+  setSelectedControl("humidity");
+  highlightMesh(clickedMesh);
+  moveCameraToMesh(clickedMesh);
+  return;
+}
 
  if (type === "ldr") {
   setSelectedName("LDR");
@@ -877,7 +991,13 @@ if (type === "humidity") {
           centerAndGroundModel();
           buildDeviceMap(loadedRoot);
           fitCameraToObject();
-
+          isInsideMode = false;
+insideBox = null;
+Object.values(meshMapRef.current).forEach((mesh) => {
+  if (mesh) {
+    mesh.userData.isDevice = true;
+  }
+});
           setLoadError("");
           setLoadedFile(modelPath);
         },
@@ -920,13 +1040,75 @@ if (type === "humidity") {
 
     renderer.domElement.addEventListener("click", handleCanvasClick);
 
-    const animate = () => {
-      animationId = requestAnimationFrame(animate);
-      controls.update();
-      updateDeviceObjectColors();
-      updatePopup();
-      renderer.render(scene, camera);
-    };
+// 👇 YAHI ADD KARO
+const handleInsideWheel = (event) => {
+  if (!isInsideMode || !insideBox) return;
+
+  event.preventDefault();
+
+  const direction = new THREE.Vector3();
+  camera.getWorldDirection(direction);
+
+  direction.y = 0;
+  direction.normalize();
+
+  const speed = 0.8;
+
+  const move =
+    event.deltaY > 0 ? -speed : speed;
+
+  camera.position.addScaledVector(direction, move);
+  controls.target.addScaledVector(direction, move);
+
+  camera.position.x = THREE.MathUtils.clamp(
+    camera.position.x,
+    insideBox.min.x + 0.5,
+    insideBox.max.x - 0.5
+  );
+
+  camera.position.z = THREE.MathUtils.clamp(
+    camera.position.z,
+    insideBox.min.z + 0.5,
+    insideBox.max.z - 0.5
+  );
+
+  controls.update();
+};
+
+renderer.domElement.addEventListener(
+  "wheel",
+  handleInsideWheel,
+  { passive: false }
+);
+ const animate = () => {
+  animationId = requestAnimationFrame(animate);
+
+  controls.update();
+
+  if (isInsideMode && insideBox) {
+    camera.position.x = THREE.MathUtils.clamp(
+      camera.position.x,
+      insideBox.min.x + 1,
+      insideBox.max.x - 1
+    );
+
+    camera.position.y = THREE.MathUtils.clamp(
+      camera.position.y,
+      insideBox.min.y + 1,
+      insideBox.max.y - 1
+    );
+
+    camera.position.z = THREE.MathUtils.clamp(
+      camera.position.z,
+      insideBox.min.z + 1,
+      insideBox.max.z - 1
+    );
+  }
+
+  updateDeviceObjectColors();
+  updatePopup();
+  renderer.render(scene, camera);
+};
 
     animate();
 
@@ -946,7 +1128,10 @@ if (type === "humidity") {
       window.removeEventListener("resize", handleResize);
       resizeObserver.disconnect();
       renderer.domElement.removeEventListener("click", handleCanvasClick);
-
+renderer.domElement.removeEventListener(
+  "wheel",
+  handleInsideWheel
+);
       if (animationId) cancelAnimationFrame(animationId);
 
       clearHighlight();
@@ -967,78 +1152,55 @@ if (type === "humidity") {
         mount.removeChild(renderer.domElement);
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps 
+
+ // eslint-disable-next-line react-hooks/exhaustive-deps
 }, []);
 
 
-  const devices = [
-    {
-      id: "temperature",
-      label: "Temperature",
-      value: `${deviceData.temperature} °C`,
-      type: "temperature",
-    },
-    {
-      id: "humidity",
-      label: "Humidity",
-      value: `${deviceData.humidity} %`,
-      type: "humidity",
-    },
-    {
-      id: "motion",
-      label: "Motion",
-      value: deviceData.motion,
-      type: "motion",
-    },
-    {
-      id: "distance",
-      label: "Distance",
-      value: deviceData.distance,
-      type: "",
-    },
-    {
-      id: "ldr",
-      label: "LDR",
-      value: deviceData.ldr,
-      type: "ldr",
-    },
-    {
-      id: "ir",
-      label: "IR",
-      value: deviceData.ir,
-      type: "sensor",
-    },
-    {
-      id: "touch",
-      label: "Touch",
-      value: deviceData.touch,
-      type: "touch",
-    },
-    {
-      id: "rfid",
-      label: "RFID",
-      value: deviceData.rfid,
-      type: "rfid",
-    },
-    {
-      id: "light",
-      label: "Light",
-      value: deviceData.light,
-      type: "light",
-    },
-    {
-      id: "ac",
-      label: "Mitsubishi AC",
-      value: deviceData.ac,
-      type: "ac",
-    },
-    {
-      id: "acTemp",
-      label: "AC Temp",
-      value: `${deviceData.acTemp} °C`,
-      type: "ac",
-    },
-  ];
+const devices = [
+  {
+    id: "temperature",
+    label: "Temperature",
+    value: `${deviceData.temperature} °C`,
+    type: "temperature",
+  },
+  {
+    id: "humidity",
+    label: "Humidity",
+    value: `${deviceData.humidity} %`,
+    type: "humidity",
+  },
+  {
+    id: "motion",
+    label: "Motion",
+    value: deviceData.motion,
+    type: "motion",
+  },
+  {
+    id: "ldr",
+    label: "LDR",
+    value: deviceData.ldr,
+    type: "ldr",
+  },
+  {
+    id: "light",
+    label: "Light",
+    value: deviceData.light,
+    type: "light",
+  },
+  {
+    id: "ac",
+    label: "Mitsubishi AC",
+    value: deviceData.ac,
+    type: "ac",
+  },
+  {
+    id: "acTemp",
+    label: "AC Temp",
+    value: `${deviceData.acTemp} °C`,
+    type: "ac",
+  },
+];
 
   return (
     <div className="viewer-page">
