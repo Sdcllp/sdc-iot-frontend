@@ -277,6 +277,52 @@ controls.maxDistance = 100;
     let animationId = null;
 let isInsideMode = false;
 let insideBox = null;
+
+// ✅ GAME / FPS CONTROLS STATE
+const moveKeys = {
+  forward: false,
+  backward: false,
+  left: false,
+  right: false,
+  up: false,
+  down: false,
+  run: false,
+};
+const fpsClock = new THREE.Clock();
+let fpsYaw = 0;
+let fpsPitch = 0;
+let pointerLocked = false;
+const eyeHeightOffset = 1.6;
+
+const setFPSRotation = () => {
+  camera.rotation.order = "YXZ";
+
+  camera.rotation.y = fpsYaw;
+  camera.rotation.x = fpsPitch;
+
+  camera.rotation.z = 0;
+};
+  
+const syncFPSRotationFromCamera = () => {
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+
+  fpsYaw = Math.atan2(-dir.x, -dir.z);
+  fpsPitch = Math.asin(THREE.MathUtils.clamp(dir.y, -1, 1));
+
+  setFPSRotation();
+};
+
+const requestFPSLock = () => {
+  if (!isInsideMode) return;
+
+  controls.enabled = false;
+  syncFPSRotationFromCamera();
+
+  if (document.pointerLockElement !== renderer.domElement && renderer.domElement.requestPointerLock) {
+    renderer.domElement.requestPointerLock();
+  }
+};
     const isRedMesh = (mesh) => {
       if (!mesh?.material) return false;
       const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -419,6 +465,7 @@ const fitCameraToObject = () => {
   restoreTransparency();
   gridHelper.visible = true;
 
+  controls.enabled = true;
   controls.enablePan = true;
   controls.enableZoom = true;
   controls.enableRotate = true;
@@ -512,11 +559,28 @@ controls.enableZoom = false; // Orbit zoom off rakho
 
   controls.update();
 
+  // ✅ Turn ON game mode
+  controls.enabled = false;
+  syncFPSRotationFromCamera();
+
+  // Canvas focus required for keyboard in some browsers
+  renderer.domElement.setAttribute("tabindex", "0");
+  renderer.domElement.focus();
+
+  // Pointer lock works only on user gesture. Button click usually works.
+  if (renderer.domElement.requestPointerLock) {
+    renderer.domElement.requestPointerLock();
+  }
+
   selectedObjectRef.current = null;
   if (popupRef.current) popupRef.current.style.display = "none";
 };
   const moveCameraToMesh = (mesh) => {
   if (!mesh) return;
+
+  isInsideMode = false;
+  insideBox = null;
+  controls.enabled = true;
 
   restoreTransparency();
   gridHelper.visible = false;
@@ -551,6 +615,7 @@ controls.enableZoom = false; // Orbit zoom off rakho
     camera.far = 5000;
     camera.updateProjectionMatrix();
 
+    controls.enabled = true;
     controls.enableRotate = true;
     controls.enableZoom = true;
     controls.enablePan = true;
@@ -583,6 +648,7 @@ controls.enableZoom = false; // Orbit zoom off rakho
     camera.far = 5000;
     camera.updateProjectionMatrix();
 
+    controls.enabled = true;
     controls.enableRotate = true;
     controls.enableZoom = true;
     controls.enablePan = true;
@@ -618,6 +684,7 @@ if (type === "ldr") {
   camera.far = 5000;
   camera.updateProjectionMatrix();
 
+  controls.enabled = true;
   controls.enableRotate = true;
   controls.enableZoom = true;
   controls.enablePan = true;
@@ -652,6 +719,7 @@ if (type === "ldr") {
   camera.far = 5000;
   camera.updateProjectionMatrix();
 
+  controls.enabled = true;
   controls.enableRotate = true;
   controls.enableZoom = true;
   controls.enablePan = true;
@@ -1079,6 +1147,53 @@ Object.values(meshMapRef.current).forEach((mesh) => {
       setSelectedControl("");
     });
 
+
+    // ✅ GAME / FPS KEYBOARD + MOUSE EVENTS
+    const setMoveKey = (event, pressed) => {
+      const key = event.key.toLowerCase();
+
+      if (key === "w" || key === "arrowup") moveKeys.forward = pressed;
+      else if (key === "s" || key === "arrowdown") moveKeys.backward = pressed;
+      else if (key === "a" || key === "arrowleft") moveKeys.left = pressed;
+      else if (key === "d" || key === "arrowright") moveKeys.right = pressed;
+     else if (key === "q") moveKeys.up = pressed;
+else if (key === "e") moveKeys.down = pressed;
+else if (key === "shift") moveKeys.run = pressed;
+      else return;
+
+      if (isInsideMode) event.preventDefault();
+    };
+
+    const handleKeyDown = (event) => {
+      setMoveKey(event, true);
+    };
+
+    const handleKeyUp = (event) => {
+      setMoveKey(event, false);
+    };
+
+    const handlePointerLockChange = () => {
+      pointerLocked = document.pointerLockElement === renderer.domElement;
+      if (isInsideMode) controls.enabled = false;
+    };
+
+    const handleMouseMove = (event) => {
+      if (!isInsideMode || !pointerLocked) return;
+
+      const sensitivity = 0.0022;
+      fpsYaw -= event.movementX * sensitivity;
+      fpsPitch -= event.movementY * sensitivity;
+
+      const limit = Math.PI / 2 - 0.01;
+      fpsPitch = THREE.MathUtils.clamp(fpsPitch, -limit, limit);
+
+      setFPSRotation();
+    };
+
+    const handleCanvasDoubleClick = () => {
+      requestFPSLock();
+    };
+
     renderer.domElement.addEventListener("click", handleCanvasClick);
 
 // 👇 YAHI ADD KARO
@@ -1121,29 +1236,77 @@ renderer.domElement.addEventListener(
   handleInsideWheel,
   { passive: false }
 );
+
+window.addEventListener("keydown", handleKeyDown);
+window.addEventListener("keyup", handleKeyUp);
+document.addEventListener("pointerlockchange", handlePointerLockChange);
+document.addEventListener("mousemove", handleMouseMove);
+renderer.domElement.addEventListener("dblclick", handleCanvasDoubleClick);
  const animate = () => {
   animationId = requestAnimationFrame(animate);
 
-  controls.update();
+  const delta = Math.min(fpsClock.getDelta(), 0.05);
 
   if (isInsideMode && insideBox) {
+    controls.enabled = false;
+
+    // ✅ WASD movement like game
+    const speed = moveKeys.run ? 7.0 : 3.5;
+    const step = speed * delta;
+
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    forward.y = 0;
+    forward.normalize();
+
+    const right = new THREE.Vector3();
+    right.crossVectors(forward, camera.up).normalize();
+
+    const movement = new THREE.Vector3();
+
+    if (moveKeys.forward) movement.add(forward);
+    if (moveKeys.backward) movement.sub(forward);
+    if (moveKeys.right) movement.add(right);
+    if (moveKeys.left) movement.sub(right);
+
+    if (movement.lengthSq() > 0) {
+      movement.normalize().multiplyScalar(step);
+      camera.position.add(movement);
+    }
+
+    // ✅ Q / E vertical movement independent hai
+    // Q = upar, E = niche
+    if (moveKeys.up) {
+      camera.position.y += step;
+    }
+
+    if (moveKeys.down) {
+      camera.position.y -= step;
+    }
+
+    // ✅ Keep camera inside model boundary
     camera.position.x = THREE.MathUtils.clamp(
       camera.position.x,
-      insideBox.min.x + 1,
-      insideBox.max.x - 1
-    );
-
-    camera.position.y = THREE.MathUtils.clamp(
-      camera.position.y,
-      insideBox.min.y + 1,
-      insideBox.max.y - 1
+      insideBox.min.x + 0.6,
+      insideBox.max.x - 0.6
     );
 
     camera.position.z = THREE.MathUtils.clamp(
       camera.position.z,
-      insideBox.min.z + 1,
-      insideBox.max.z - 1
+      insideBox.min.z + 0.6,
+      insideBox.max.z - 0.6
     );
+
+    // ✅ Fixed human eye height, not flying
+camera.position.y = THREE.MathUtils.clamp(
+  camera.position.y,
+  insideBox.min.y + 0.8,
+  insideBox.max.y - 0.5
+);
+
+    setFPSRotation();
+  } else {
+    controls.update();
   }
 
   updateDeviceObjectColors();
@@ -1173,6 +1336,15 @@ renderer.domElement.removeEventListener(
   "wheel",
   handleInsideWheel
 );
+window.removeEventListener("keydown", handleKeyDown);
+window.removeEventListener("keyup", handleKeyUp);
+document.removeEventListener("pointerlockchange", handlePointerLockChange);
+document.removeEventListener("mousemove", handleMouseMove);
+renderer.domElement.removeEventListener("dblclick", handleCanvasDoubleClick);
+
+if (document.pointerLockElement === renderer.domElement) {
+  document.exitPointerLock();
+}
       if (animationId) cancelAnimationFrame(animationId);
 
       clearHighlight();
@@ -1255,7 +1427,7 @@ const devices = [
           </div>
         </div>
 
-        {loadedFile && <div className="info-box">3D model loaded</div>}
+        {loadedFile && <div className="info-box">3D model loaded • Inside View: W/A/S/D move, Q up, E down, mouse look, Shift run, Esc unlock, double-click lock</div>}
         {loadError && <div className="error-box">{loadError}</div>}
 
         <div className="selected-box">
@@ -1418,4 +1590,6 @@ const devices = [
     </div>
   );
 }
+
+
 
