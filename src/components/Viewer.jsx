@@ -1743,6 +1743,8 @@ export default function Viewer({ floor, room }) {
       const byOwner = new Map();
       const windowMap = new Map();
       const bedBoxes = [];
+      const headBoxes = [];
+      const bedMeshes = [];
 
       items.forEach(({ mesh, box }) => {
         const label = getLabel(mesh);
@@ -1751,6 +1753,11 @@ export default function Viewer({ floor, room }) {
 
         if (/^(king|queen|double|twin|single)?bed\d*$/.test(compact)) {
           bedBoxes.push(box);
+          bedMeshes.push({ mesh, kind: "base" });
+        }
+        if (/^bedbackfor/.test(compact)) {
+          headBoxes.push(box);
+          bedMeshes.push({ mesh, kind: "head" });
         }
 
         const type = classifyName(source);
@@ -1835,6 +1842,7 @@ export default function Viewer({ floor, room }) {
           center: box.getCenter(new THREE.Vector3()),
           floorY: box.min.y,
           topY: box.max.y,
+          size: box.getSize(new THREE.Vector3()),
           spawn: undefined,
           rep: {},
         }))
@@ -1845,7 +1853,24 @@ export default function Viewer({ floor, room }) {
         );
       rooms.forEach((r, index) => {
         r.index = index;
+
+        // which end of the bed is the headboard?
+        let best = null;
+        headBoxes.forEach((hb) => {
+          const hc = hb.getCenter(new THREE.Vector3());
+          const d = Math.hypot(hc.x - r.center.x, hc.z - r.center.z);
+          if (d < 2.5 && (!best || d < best.d)) best = { d, hc };
+        });
+        if (best) {
+          const dx = best.hc.x - r.center.x;
+          const dz = best.hc.z - r.center.z;
+          r.head =
+            Math.abs(dx) > Math.abs(dz)
+              ? new THREE.Vector3(Math.sign(dx), 0, 0)
+              : new THREE.Vector3(0, 0, Math.sign(dz));
+        }
       });
+      styleBed(bedMeshes);
 
       // device -> room (nearest bed on the same floor)
       devices.forEach((device) => {
@@ -2556,7 +2581,6 @@ export default function Viewer({ floor, room }) {
       items: [],
       built: new Set(),
       glowTex: null,
-      mistTex: null,
       tvCanvas: null,
       tvTex: null,
       tvLast: 0,
@@ -2582,23 +2606,6 @@ export default function Viewer({ floor, room }) {
       g.fillRect(0, 0, 64, 64);
       fx.glowTex = new THREE.CanvasTexture(c);
       return fx.glowTex;
-    };
-
-    // very soft, no hard core: used for the cold-air mist
-    const getMistTexture = () => {
-      if (fx.mistTex) return fx.mistTex;
-      const c = document.createElement("canvas");
-      c.width = 64;
-      c.height = 64;
-      const g = c.getContext("2d");
-      const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-      grad.addColorStop(0, "rgba(255,255,255,0.55)");
-      grad.addColorStop(0.5, "rgba(255,255,255,0.22)");
-      grad.addColorStop(1, "rgba(255,255,255,0)");
-      g.fillStyle = grad;
-      g.fillRect(0, 0, 64, 64);
-      fx.mistTex = new THREE.CanvasTexture(c);
-      return fx.mistTex;
     };
 
     const makeGlow = (color, size, opacity) => {
@@ -2861,185 +2868,108 @@ export default function Viewer({ floor, room }) {
           screen.visible = halo.visible = level > 0.01;
         };
       } else if (type === "ac") {
-        // Soft cold-air plume (big translucent puffs that spread out) plus a
-        // few flowing air-stream lines, like an AC airflow illustration.
-        const N = 34;
-        const pos = new Float32Array(N * 3);
-        const vel = new Float32Array(N * 3);
-        const age = new Float32Array(N);
-        const life = new Float32Array(N);
-        const grow = new Float32Array(N);
-        const size = new Float32Array(N);
-        const alpha = new Float32Array(N);
+        // Soft, translucent air "beams" fanning down from the AC (like the
+        // light-ray look of an AC advert). No particles, nothing bold.
+        const M = 7; // beams
+        const K = 10; // rows along a beam
+        const reach = 0.9; // metres forward at the end of a beam
+        const drop = 1.7; // metres down at the end of a beam
+        const beams = [];
 
-        const spawn = (i, spread) => {
-          const side = (Math.random() - 0.5) * fr.width * 0.95;
-          const p = frameAt(
-            fr,
-            0.08,
-            side,
-            -fr.size.y * 0.2 + Math.random() * 0.1,
+        for (let m = 0; m < M; m++) {
+          const side0 = (m / (M - 1) - 0.5) * fr.width * 0.8;
+          const w0 = (fr.width / M) * 0.55;
+          const positions = [];
+          const uvs = [];
+          const index = [];
+
+          // two crossed strips per beam so it also reads from the side
+          [0, 1].forEach((strip) => {
+            const base = positions.length / 3;
+            for (let j = 0; j <= K; j++) {
+              const v = j / K;
+              const half = (w0 + w0 * 1.6 * v) / 2;
+              const c = frameAt(
+                fr,
+                0.06 + v * reach * (0.7 + 0.3 * Math.cos(m * 1.3)),
+                side0 * (1 + 0.9 * v),
+                -fr.size.y * 0.2 - v * drop,
+              );
+              const axis = strip === 0 ? fr.right : fr.f;
+              const a = c.clone().addScaledVector(axis, -half);
+              const b = c.clone().addScaledVector(axis, half);
+              positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+              uvs.push(0, v, 1, v);
+            }
+            for (let j = 0; j < K; j++) {
+              const i0 = base + j * 2;
+              index.push(i0, i0 + 1, i0 + 2, i0 + 1, i0 + 3, i0 + 2);
+            }
+          });
+
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute(
+            "position",
+            new THREE.Float32BufferAttribute(positions, 3),
           );
-          const speed = 0.32 + Math.random() * 0.18;
-          pos[i * 3] = p.x;
-          pos[i * 3 + 1] = p.y;
-          pos[i * 3 + 2] = p.z;
-          vel[i * 3] =
-            fr.f.x * speed + fr.right.x * (Math.random() - 0.5) * 0.09;
-          vel[i * 3 + 1] = -0.14 - Math.random() * 0.07;
-          vel[i * 3 + 2] =
-            fr.f.z * speed + fr.right.z * (Math.random() - 0.5) * 0.09;
-          life[i] = 3.2 + Math.random() * 1.6;
-          age[i] = spread ? Math.random() * life[i] : 0;
-          grow[i] = 0.35 + Math.random() * 0.3;
-        };
-        for (let i = 0; i < N; i++) spawn(i, true);
+          geo.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+          geo.setIndex(index);
 
-        const mistGeo = new THREE.BufferGeometry();
-        mistGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-        mistGeo.setAttribute("size", new THREE.BufferAttribute(size, 1));
-        mistGeo.setAttribute("alpha", new THREE.BufferAttribute(alpha, 1));
-        const mistMat = new THREE.ShaderMaterial({
-          uniforms: {
-            map: { value: getMistTexture() },
-            scale: { value: 400 },
-            tint: { value: new THREE.Color(0.87, 0.94, 1) },
-          },
-          vertexShader: `
-            attribute float size;
-            attribute float alpha;
-            uniform float scale;
-            varying float vA;
-            void main() {
-              vA = alpha;
-              vec4 mv = modelViewMatrix * vec4(position, 1.0);
-              gl_PointSize = min(size * scale / max(-mv.z, 0.1), 90.0);
-              gl_Position = projectionMatrix * mv;
-            }`,
-          fragmentShader: `
-            uniform sampler2D map;
-            uniform vec3 tint;
-            varying float vA;
-            void main() {
-              float a = texture2D(map, gl_PointCoord).a;
-              gl_FragColor = vec4(tint, a * vA);
-            }`,
-          transparent: true,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-        });
-        const mist = new THREE.Points(mistGeo, mistMat);
-        mist.frustumCulled = false;
-        mist.renderOrder = 22;
-        mist.raycast = () => {};
-
-        // flowing air-stream lines
-        const M = 4;
-        const K = 18;
-        const linePos = new Float32Array(M * K * 6);
-        const lineCol = new Float32Array(M * K * 6);
-        const lineGeo = new THREE.BufferGeometry();
-        lineGeo.setAttribute("position", new THREE.BufferAttribute(linePos, 3));
-        lineGeo.setAttribute("color", new THREE.BufferAttribute(lineCol, 3));
-        const streams = new THREE.LineSegments(
-          lineGeo,
-          new THREE.LineBasicMaterial({
-            vertexColors: true,
+          const mat = new THREE.ShaderMaterial({
+            uniforms: {
+              time: { value: 0 },
+              level: { value: 0 },
+              phase: { value: m * 1.9 },
+              tint: { value: new THREE.Color(0.86, 0.94, 1) },
+            },
+            vertexShader: `
+              varying vec2 vUv;
+              void main() {
+                vUv = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+              }`,
+            fragmentShader: `
+              uniform float time;
+              uniform float level;
+              uniform float phase;
+              uniform vec3 tint;
+              varying vec2 vUv;
+              void main() {
+                float edge = smoothstep(0.0, 0.4, vUv.x) * smoothstep(1.0, 0.6, vUv.x);
+                float fade = smoothstep(0.0, 0.1, vUv.y) * pow(1.0 - vUv.y, 1.5);
+                float shimmer = 0.7 + 0.3 * sin(time * 0.9 + phase + vUv.y * 4.0);
+                gl_FragColor = vec4(tint, edge * fade * shimmer * level * 0.2);
+              }`,
             transparent: true,
-            blending: THREE.AdditiveBlending,
             depthWrite: false,
-          }),
-        );
-        streams.frustumCulled = false;
-        streams.renderOrder = 22;
-        streams.raycast = () => {};
+            side: THREE.DoubleSide,
+            blending: THREE.AdditiveBlending,
+          });
 
-        const halo = makeGlow(0xddefff, fr.width * 1.2, 0);
-        halo.position.copy(frameAt(fr, 0.15, 0, -fr.size.y * 0.1));
+          const mesh = new THREE.Mesh(geo, mat);
+          mesh.frustumCulled = false;
+          mesh.renderOrder = 22;
+          mesh.raycast = () => {};
+          group.add(mesh);
+          beams.push(mat);
+        }
 
-        group.add(mist, streams, halo);
-        const streamPoint = (s, side, t, phase, reach, out, o) => {
-          const p = frameAt(
-            fr,
-            0.08 + s * reach,
-            side + Math.sin(s * 5 + t * 0.65 + phase) * 0.025 * s,
-            -fr.size.y * 0.2 - s * s * 0.35,
-          );
-          out[o] = p.x;
-          out[o + 1] = p.y;
-          out[o + 2] = p.z;
-        };
-
-        item.tick = (level, t, dt) => {
+        item.tick = (level, t) => {
           const visible = level > 0.01;
-          mist.visible = streams.visible = halo.visible = visible;
-          if (!visible) return;
-
-          // colder set-point = stronger, bluer wind
+          // colder set-point = slightly stronger airflow
           const strength = THREE.MathUtils.clamp(
             (30 - roomTempRef.current) / 14,
             0,
             1,
           );
-          const speedK = 0.52 + strength * 0.25;
-          halo.material.opacity = level * 0.025;
-          mistMat.uniforms.scale.value =
-            renderer.domElement.height /
-            (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
-
-          for (let i = 0; i < N; i++) {
-            age[i] += dt;
-            if (age[i] > life[i]) spawn(i, false);
-
-            const drag = 1 - 0.18 * dt;
-            vel[i * 3] *= drag;
-            vel[i * 3 + 2] *= drag;
-            vel[i * 3 + 1] -= 0.02 * dt;
-            const curl = Math.sin(age[i] * 2.2 + i) * 0.035 * dt;
-            vel[i * 3] += fr.right.x * curl;
-            vel[i * 3 + 2] += fr.right.z * curl;
-
-            pos[i * 3] += vel[i * 3] * dt * speedK;
-            pos[i * 3 + 1] += vel[i * 3 + 1] * dt * speedK;
-            pos[i * 3 + 2] += vel[i * 3 + 2] * dt * speedK;
-
-            const k = age[i] / life[i];
-            size[i] = 0.09 + k * grow[i] * 0.35;
-            alpha[i] =
-              Math.pow(Math.sin(Math.PI * k), 1.3) *
-              0.055 *
-              level *
-              (0.6 + 0.4 * strength);
-          }
-          mistGeo.attributes.position.needsUpdate = true;
-          mistGeo.attributes.size.needsUpdate = true;
-          mistGeo.attributes.alpha.needsUpdate = true;
-
-          const reach = 1.45 + strength * 0.35;
-          for (let m = 0; m < M; m++) {
-            const side = (m / (M - 1) - 0.5) * fr.width * 0.9;
-            const phase = m * 1.7;
-            for (let k = 0; k < K; k++) {
-              const o = (m * K + k) * 6;
-              const s0 = k / K;
-              const s1 = (k + 1) / K;
-              streamPoint(s0, side, t, phase, reach, linePos, o);
-              streamPoint(s1, side, t, phase, reach, linePos, o + 3);
-              // a bright pulse travels outward along every stream
-              const pulse = (s) =>
-                Math.sin(Math.PI * ((s + t * 0.16 * speedK + m * 0.13) % 1));
-              const c0 = Math.max(0, pulse(s0)) * 0.035 * level;
-              const c1 = Math.max(0, pulse(s1)) * 0.035 * level;
-              lineCol[o] = 0.45 * c0;
-              lineCol[o + 1] = 0.75 * c0;
-              lineCol[o + 2] = c0;
-              lineCol[o + 3] = 0.45 * c1;
-              lineCol[o + 4] = 0.75 * c1;
-              lineCol[o + 5] = c1;
-            }
-          }
-          lineGeo.attributes.position.needsUpdate = true;
-          lineGeo.attributes.color.needsUpdate = true;
+          beams.forEach((mat) => {
+            mat.uniforms.time.value = t;
+            mat.uniforms.level.value = level * (0.75 + 0.25 * strength);
+          });
+          group.children.forEach((child) => {
+            if (child.material && child.material.uniforms)
+              child.visible = visible;
+          });
         };
       }
       // fridge: LED only
@@ -3084,7 +3014,422 @@ export default function Viewer({ floor, room }) {
       };
     };
 
-    // Curtains: two pleated panels that slide open / closed in front of a window
+    /* ------------------------------------------------------------------
+       REAL-LOOK ROOM: bed linen, pillows, headboard, rug, curtains, sky
+       (everything procedural: no extra files / images needed)
+    ------------------------------------------------------------------ */
+    fx.fabric = {};
+    fx.lamps = [];
+    fx.plainBg = scene.background;
+    fx.skyOn = false;
+    fx.skyTex = null;
+
+    // small woven-fabric canvas texture
+    const getFabric = (name, base, shade, repeat) => {
+      if (fx.fabric[name]) return fx.fabric[name];
+      const c = document.createElement("canvas");
+      c.width = 128;
+      c.height = 128;
+      const g = c.getContext("2d");
+      g.fillStyle = base;
+      g.fillRect(0, 0, 128, 128);
+      for (let i = 0; i < 128; i += 2) {
+        g.fillStyle = `rgba(${shade},0.07)`;
+        g.fillRect(i, 0, 1, 128);
+        g.fillRect(0, i, 128, 1);
+      }
+      for (let i = 0; i < 1400; i++) {
+        g.fillStyle = `rgba(${shade},${(Math.random() * 0.08).toFixed(3)})`;
+        g.fillRect(Math.random() * 128, Math.random() * 128, 1.5, 1.5);
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(repeat, repeat);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      fx.fabric[name] = tex;
+      return tex;
+    };
+
+    const fabricMat = (name, base, shade, repeat, color = 0xffffff) =>
+      new THREE.MeshStandardMaterial({
+        color,
+        map: getFabric(name, base, shade, repeat),
+        roughness: 0.95,
+        metalness: 0,
+        side: THREE.DoubleSide,
+      });
+
+    // soft cloth wrinkles
+    const wrinkle = (x, z) =>
+      0.5 * Math.sin(x * 7.1 + z * 3.3) +
+      0.35 * Math.sin(x * 13.7 - z * 5.9 + 1.2) +
+      0.25 * Math.sin(z * 9.3 + x * 2.1 + 2.4);
+
+    // Grey upholstered headboard, dark frame (the GLB bed is plain grey)
+    const styleBed = (list) => {
+      list.forEach(({ mesh, kind }) => {
+        mesh.material =
+          kind === "head"
+            ? fabricMat("headboard", "#8d877b", "60,55,45", 6)
+            : fabricMat("bedbase", "#6d6862", "40,38,35", 4);
+      });
+    };
+
+    // Cloth lying on the mattress; edges that hang down over the bed sides/foot.
+    //  x: across the bed, z: along the bed (head = -L/2, foot = +L/2)
+    const drapedCloth = (W, z0, z1, hangFoot, top, material, hang = 0.34) => {
+      const segX = 44;
+      const segZ = Math.max(8, Math.round((z1 - z0) * 28));
+      const pos = [];
+      const uv = [];
+      const idx = [];
+      const edge = 0.11;
+      for (let j = 0; j <= segZ; j++) {
+        for (let i = 0; i <= segX; i++) {
+          const x = (i / segX - 0.5) * W;
+          const z = z0 + (j / segZ) * (z1 - z0);
+          const dx = Math.max(0, Math.abs(x) - (W / 2 - edge)) / edge;
+          const dz = hangFoot ? Math.max(0, z - (z1 - edge)) / edge : 0;
+          const e = Math.min(1, Math.max(dx, dz));
+          const y = top + 0.011 * wrinkle(x, z) - hang * Math.pow(e, 1.7);
+          pos.push(x, y, z);
+          uv.push(x * 1.4, z * 1.4);
+        }
+      }
+      for (let j = 0; j < segZ; j++) {
+        for (let i = 0; i < segX; i++) {
+          const a = j * (segX + 1) + i;
+          const b = a + 1;
+          const c = a + segX + 1;
+          const d = c + 1;
+          idx.push(a, c, b, b, c, d);
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+      geo.setIndex(idx);
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, material);
+      mesh.raycast = () => {};
+      return mesh;
+    };
+
+    // Puffy pillow / cushion (top surface only, the bottom rests on the bed)
+    const makePillow = (hw, hd, h, material) => {
+      const N = 22;
+      const pos = [];
+      const uv = [];
+      const idx = [];
+      for (let j = 0; j <= N; j++) {
+        for (let i = 0; i <= N; i++) {
+          const u = (i / N) * 2 - 1;
+          const v = (j / N) * 2 - 1;
+          const y =
+            h *
+            Math.pow(Math.max(0, 1 - u * u), 0.45) *
+            Math.pow(Math.max(0, 1 - v * v), 0.45) *
+            (1 + 0.06 * wrinkle(u * 2, v * 2));
+          pos.push(u * hw, y, v * hd);
+          uv.push(u * 0.5 + 0.5, v * 0.5 + 0.5);
+        }
+      }
+      for (let j = 0; j < N; j++) {
+        for (let i = 0; i < N; i++) {
+          const a = j * (N + 1) + i;
+          const b = a + 1;
+          const c = a + N + 1;
+          const d = c + 1;
+          idx.push(a, c, b, b, c, d);
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+      geo.setIndex(idx);
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, material);
+      mesh.raycast = () => {};
+      return mesh;
+    };
+
+    // walnut wood grain
+    const getWood = () => {
+      if (fx.fabric.wood) return fx.fabric.wood;
+      const c = document.createElement("canvas");
+      c.width = 256;
+      c.height = 256;
+      const g = c.getContext("2d");
+      g.fillStyle = "#6a4528";
+      g.fillRect(0, 0, 256, 256);
+      for (let i = 0; i < 160; i++) {
+        const y = Math.random() * 256;
+        const dark = Math.random() < 0.6;
+        g.strokeStyle = dark
+          ? `rgba(40,22,10,${(0.1 + Math.random() * 0.25).toFixed(2)})`
+          : `rgba(150,105,60,${(0.08 + Math.random() * 0.15).toFixed(2)})`;
+        g.lineWidth = 0.6 + Math.random() * 1.6;
+        g.beginPath();
+        g.moveTo(0, y);
+        for (let x = 0; x <= 256; x += 32) {
+          g.lineTo(x, y + Math.sin(x * 0.05 + i) * 2.2);
+        }
+        g.stroke();
+      }
+      const tex = new THREE.CanvasTexture(c);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(1, 1);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      fx.fabric.wood = tex;
+      return tex;
+    };
+
+    // Padded, channel-tufted headboard that sits in front of the flat GLB panel
+    const makeHeadboard = (W, yBottom, yTop, zFace, material) => {
+      const segX = 72;
+      const segY = 22;
+      const w = W + 0.08;
+      const h = yTop - yBottom;
+      const pos = [];
+      const uv = [];
+      const idx = [];
+      const spacing = 0.33;
+      for (let j = 0; j <= segY; j++) {
+        for (let i = 0; i <= segX; i++) {
+          const x = (i / segX - 0.5) * w;
+          const y = yBottom + (j / segY) * h;
+          const ex = Math.abs(x) / (w / 2);
+          const ey = Math.abs(y - (yBottom + h / 2)) / (h / 2);
+          const edge = Math.max(ex, ey);
+          const pad = 0.075 * (1 - Math.pow(edge, 4));
+          const phase = (((x + w / 2) % spacing) + spacing) % spacing;
+          const dist = Math.min(phase, spacing - phase);
+          const groove = 0.024 * Math.exp(-Math.pow(dist / 0.015, 2));
+          pos.push(x, y, zFace + pad - groove * (1 - Math.pow(edge, 6)));
+          uv.push(x * 1.6, y * 1.6);
+        }
+      }
+      for (let j = 0; j < segY; j++) {
+        for (let i = 0; i < segX; i++) {
+          const a = j * (segX + 1) + i;
+          const b = a + 1;
+          const c = a + segX + 1;
+          const d = c + 1;
+          idx.push(a, b, c, b, d, c);
+        }
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+      geo.setIndex(idx);
+      geo.computeVertexNormals();
+      const mesh = new THREE.Mesh(geo, material);
+      mesh.raycast = () => {};
+      return mesh;
+    };
+
+    // Round brass-footed table lamp with a glowing shade
+    const makeLamp = (x, y, z, roomIndex) => {
+      const lamp = new THREE.Group();
+      lamp.position.set(x, y, z);
+      const brass = new THREE.MeshStandardMaterial({
+        color: 0xb08d57,
+        roughness: 0.35,
+        metalness: 0.85,
+      });
+      const foot = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.07, 0.08, 0.025, 20),
+        brass,
+      );
+      foot.position.y = 0.0125;
+      const stem = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.014, 0.014, 0.22, 10),
+        brass,
+      );
+      stem.position.y = 0.13;
+      const shadeMat = new THREE.MeshStandardMaterial({
+        color: 0xfff1d6,
+        emissive: 0xffd9a0,
+        emissiveIntensity: 0.12,
+        roughness: 0.85,
+      });
+      const shade = new THREE.Mesh(
+        new THREE.SphereGeometry(0.13, 24, 16),
+        shadeMat,
+      );
+      shade.scale.set(1, 0.88, 1);
+      shade.position.y = 0.34;
+      [foot, stem, shade].forEach((m) => {
+        m.raycast = () => {};
+        lamp.add(m);
+      });
+      const halo = makeGlow(0xffd29a, 1.0, 0);
+      halo.position.set(x, y + 0.34, z);
+      fx.group.add(lamp, halo);
+      fx.lamps.push({ room: roomIndex, shade, halo, level: 0 });
+    };
+
+    // Warm wooden bedside tables with a lamp on each, padded headboard
+    const dressBedside = (r) => {
+      const woodMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        map: getWood(),
+        roughness: 0.55,
+        metalness: 0.05,
+      });
+      devices.forEach((d) => {
+        if (d.type !== "temperature" || d.room !== r.index) return;
+        if (Math.abs(d.center.y - r.floorY) > 1.2) return;
+        const dist = Math.hypot(
+          d.center.x - r.center.x,
+          d.center.z - r.center.z,
+        );
+        if (dist > 2.4 || dist < 0.6) return;
+
+        d.meshes.forEach((m) => {
+          m.material = woodMat;
+        });
+        makeLamp(d.center.x, d.box.max.y, d.center.z, r.index);
+      });
+    };
+
+    // White duvet, beige runner, pillows, olive cushions and a grey rug,
+    // laid out like the reference room plan.
+    const buildBedding = (r) => {
+      if (!r.head || !r.size) return;
+
+      const foot = r.head.clone().negate();
+      const across =
+        Math.abs(r.head.x) * r.size.z + Math.abs(r.head.z) * r.size.x;
+      const length =
+        Math.abs(r.head.x) * r.size.x + Math.abs(r.head.z) * r.size.z;
+      const W = across;
+      const L = length;
+      const yaw = Math.atan2(foot.x, foot.z);
+
+      const bed = new THREE.Group();
+      bed.position.set(r.center.x, r.topY, r.center.z);
+      bed.rotation.y = yaw;
+      fx.group.add(bed);
+
+      const white = fabricMat("linen", "#f3f1ec", "120,115,105", 1);
+      const runnerMat = fabricMat("runner", "#b3a58c", "70,60,45", 1);
+      const oliveMat = fabricMat("olive", "#6f7b4c", "30,40,20", 1);
+
+      // duvet from just below the pillows to the foot (hangs over 3 sides)
+      bed.add(
+        drapedCloth(W + 0.05, -L / 2 + 0.6, L / 2 + 0.03, true, 0.075, white),
+      );
+      // turned-down sheet band across the bed
+      bed.add(
+        drapedCloth(
+          W + 0.04,
+          -L / 2 + 0.56,
+          -L / 2 + 0.9,
+          false,
+          0.092,
+          white,
+          0.2,
+        ),
+      );
+      // beige runner over the foot third
+      bed.add(
+        drapedCloth(
+          W + 0.07,
+          L / 2 - 0.62,
+          L / 2 + 0.05,
+          true,
+          0.092,
+          runnerMat,
+          0.36,
+        ),
+      );
+
+      // padded headboard in front of the flat GLB panel
+      bed.add(
+        makeHeadboard(
+          W,
+          -0.25,
+          0.8,
+          -L / 2 + 0.006,
+          fabricMat("headboard2", "#8f8878", "60,55,45", 1),
+        ),
+      );
+      dressBedside(r);
+
+      // pillows against the headboard
+      [-1, 1].forEach((s) => {
+        const p = makePillow(0.4, 0.27, 0.14, white);
+        p.position.set(s * (W * 0.24), 0.07, -L / 2 + 0.3);
+        p.rotation.x = -0.14;
+        p.rotation.y = s * 0.04;
+        bed.add(p);
+
+        const q = makePillow(0.32, 0.21, 0.11, white);
+        q.position.set(s * (W * 0.24) + s * 0.02, 0.15, -L / 2 + 0.2);
+        q.rotation.x = -0.35;
+        bed.add(q);
+      });
+      // olive cushions on top
+      [-1, 1].forEach((s) => {
+        const c = makePillow(0.2, 0.2, 0.1, oliveMat);
+        c.position.set(s * 0.24, 0.17, -L / 2 + 0.58);
+        c.rotation.x = -0.45;
+        c.rotation.y = s * 0.5;
+        bed.add(c);
+      });
+
+      // grey carpet under the bed and the seating area
+      const rugMat = fabricMat("carpet", "#9a958c", "60,58,52", 1);
+      rugMat.map.repeat.set(1, 1);
+      rugMat.polygonOffset = true;
+      rugMat.polygonOffsetFactor = -2;
+      rugMat.polygonOffsetUnits = -2;
+      const rugW = W + 1.7;
+      const rugL = L + 1.5;
+      const rugGeo = new THREE.PlaneGeometry(rugW, rugL);
+      const uvAttr = rugGeo.attributes.uv;
+      for (let i = 0; i < uvAttr.count; i++) {
+        uvAttr.setXY(
+          i,
+          uvAttr.getX(i) * rugW * 2.2,
+          uvAttr.getY(i) * rugL * 2.2,
+        );
+      }
+      const rug = new THREE.Mesh(rugGeo, rugMat);
+      rug.raycast = () => {};
+      rug.rotation.x = -Math.PI / 2;
+      const rugGroup = new THREE.Group();
+      rugGroup.position.set(
+        r.center.x + foot.x * 0.35,
+        r.floorY + 0.008,
+        r.center.z + foot.z * 0.35,
+      );
+      rugGroup.rotation.y = yaw;
+      rugGroup.add(rug);
+      fx.group.add(rugGroup);
+    };
+
+    const getSkyTexture = () => {
+      if (fx.skyTex) return fx.skyTex;
+      const c = document.createElement("canvas");
+      c.width = 4;
+      c.height = 256;
+      const g = c.getContext("2d");
+      const grad = g.createLinearGradient(0, 0, 0, 256);
+      grad.addColorStop(0, "#3f86d6");
+      grad.addColorStop(0.55, "#8fc1ee");
+      grad.addColorStop(1, "#dcecf8");
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 4, 256);
+      fx.skyTex = new THREE.CanvasTexture(c);
+      fx.skyTex.colorSpace = THREE.SRGBColorSpace;
+      return fx.skyTex;
+    };
+
+    // Curtains: sheer voile (always there) + heavy drapes that slide open / closed
     const makeCurtainFx = (r, w) => {
       const size = w.box.getSize(new THREE.Vector3());
       const c = w.box.getCenter(new THREE.Vector3());
@@ -3113,14 +3458,51 @@ export default function Viewer({ floor, room }) {
       group.rotation.y = Math.atan2(f.x, f.z);
       fx.group.add(group);
 
+      // rod with finials
+      const rodMat = new THREE.MeshStandardMaterial({
+        color: 0x3a342d,
+        roughness: 0.5,
+        metalness: 0.6,
+      });
       const rod = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.018, 0.018, W + 0.2, 8),
-        new THREE.MeshLambertMaterial({ color: 0x2b2b2b }),
+        new THREE.CylinderGeometry(0.015, 0.015, W + 0.2, 10),
+        rodMat,
       );
       rod.rotation.z = Math.PI / 2;
       rod.position.set(0, H + 0.02, 0);
       rod.raycast = () => {};
       group.add(rod);
+      [-1, 1].forEach((s) => {
+        const ball = new THREE.Mesh(
+          new THREE.SphereGeometry(0.03, 12, 10),
+          rodMat,
+        );
+        ball.position.set((s * (W + 0.2)) / 2, H + 0.02, 0);
+        ball.raycast = () => {};
+        group.add(ball);
+      });
+
+      // sheer voile just behind the drapes (stays when the drapes are open)
+      const sheerGeo = new THREE.PlaneGeometry(W, H, 48, 1);
+      sheerGeo.translate(0, H / 2, 0);
+      const sheerArr = sheerGeo.attributes.position.array;
+      for (let i = 0; i < sheerArr.length; i += 3) {
+        sheerArr[i + 2] = -0.07 + Math.sin(sheerArr[i] * 14) * 0.018;
+      }
+      sheerGeo.computeVertexNormals();
+      const sheer = new THREE.Mesh(
+        sheerGeo,
+        new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0.38,
+          roughness: 1,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      );
+      sheer.raycast = () => {};
+      group.add(sheer);
 
       const item = {
         type: "curtains",
@@ -3134,16 +3516,12 @@ export default function Viewer({ floor, room }) {
       };
 
       const panels = [-1, 1].map((dir) => {
-        const geo = new THREE.PlaneGeometry(pw, H, 28, 1);
-        geo.translate((dir * -1 * pw) / 2 + 0, H / 2, 0);
-        // outer edge of the panel sits at x = 0 after the translate above
+        const geo = new THREE.PlaneGeometry(pw, H, 64, 8);
+        geo.translate((dir * -1 * pw) / 2, H / 2, 0);
         const base = geo.attributes.position.array.slice();
         const mesh = new THREE.Mesh(
           geo,
-          new THREE.MeshLambertMaterial({
-            color: 0xcdb89a,
-            side: THREE.DoubleSide,
-          }),
+          fabricMat("curtain", "#e4d9c6", "90,75,55", 2, 0xf0e6d4),
         );
         mesh.position.x = dir * (W / 2);
         mesh.userData.isCurtain = item;
@@ -3151,22 +3529,27 @@ export default function Viewer({ floor, room }) {
         return { mesh, base };
       });
 
-      let lastAmp = -1;
+      let lastKey = "";
       item.tick = (level, t, dt, target) => {
         const s = level * level * (3 - 2 * level);
         const moving = Math.abs(target - level) > 0.003;
         const scaleX = 0.16 + 0.84 * s;
-        const amp = 0.035 + (moving ? 0.025 * Math.sin(t * 9) : 0);
+        const key = moving ? "m" : "s";
         panels.forEach(({ mesh, base }) => {
           mesh.scale.x = scaleX;
-          if (!moving && lastAmp === amp) return;
+          if (!moving && lastKey === "s") return;
           const arr = mesh.geometry.attributes.position.array;
           for (let i = 0; i < arr.length; i += 3) {
-            arr[i + 2] = Math.sin(base[i] * 12.5 + (moving ? t * 3 : 0)) * amp;
+            const x = base[i];
+            const yN = base[i + 1] / H; // 0 bottom .. 1 top
+            const folds = Math.sin(x * 12.5) + 0.35 * Math.sin(x * 28 + 1.3);
+            const sway = moving ? Math.sin(t * 4 + x * 3) * 0.03 * (1 - yN) : 0;
+            arr[i + 2] = folds * 0.065 * (1 + 0.4 * (1 - yN)) + sway;
           }
           mesh.geometry.attributes.position.needsUpdate = true;
+          mesh.geometry.computeVertexNormals();
         });
-        lastAmp = amp;
+        lastKey = key;
       };
 
       return item;
@@ -3176,6 +3559,7 @@ export default function Viewer({ floor, room }) {
       fx.built.add(index);
       const r = rooms[index];
       if (!r) return;
+      buildBedding(r);
 
       ["microwave", "tv", "ac", "fridge"].forEach((type) => {
         const rep = r.rep[type];
@@ -3222,13 +3606,35 @@ export default function Viewer({ floor, room }) {
         if (o.material) o.material.dispose();
       });
       fx.group.clear();
+      fx.lamps = [];
       fx.items = [];
       fx.built.clear();
     };
 
     const updateEffects = (now, dt) => {
+      // real sky behind the windows while you are inside a room
+      if (fx.skyOn !== walk.active) {
+        fx.skyOn = walk.active;
+        scene.background = walk.active ? getSkyTexture() : fx.plainBg;
+      }
+
       const demo = demoDeviceRef.current || {};
       const power = demo.power !== false;
+
+      // bedside lamps follow the room lights
+      const lampOn = power && demo.light !== false;
+      const lampEase = Math.min(1, dt * 7);
+      fx.lamps.forEach((l) => {
+        l.level += ((lampOn ? 1 : 0) - l.level) * lampEase;
+        l.shade.material.emissiveIntensity = 0.12 + 0.85 * l.level;
+        const near = THREE.MathUtils.clamp(
+          (l.halo.position.distanceTo(camera.position) - 0.4) / 1.0,
+          0,
+          1,
+        );
+        l.halo.material.opacity = l.level * 0.35 * near;
+      });
+
       const room =
         walk.active && currentRoom.floorIdx === 0 && currentRoom.index >= 0
           ? currentRoom.index
@@ -4069,7 +4475,8 @@ export default function Viewer({ floor, room }) {
 
       disposeEffects();
       if (fx.glowTex) fx.glowTex.dispose();
-      if (fx.mistTex) fx.mistTex.dispose();
+      if (fx.skyTex) fx.skyTex.dispose();
+      Object.values(fx.fabric).forEach((tex) => tex.dispose());
       if (fx.tvTex) fx.tvTex.dispose();
       scene.remove(fx.group);
 
