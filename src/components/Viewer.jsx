@@ -16,6 +16,19 @@ const API_BASE_URL = (
 const SOCKET_URL = API_BASE_URL.replace(/\/api$/, "");
 
 /*
+  Clicking a device in the 3D room (or its button in "Smart Room Controls")
+  flips the on-screen demo state: red/green badge + LED + glow / picture / wind.
+  Set this to true to ALSO send the command to the real backend/hardware.
+*/
+const SEND_TO_HARDWARE = false;
+
+// devices that can be switched ON / OFF from the 3D room
+const SWITCHABLE = ["light", "ac", "fridge", "microwave", "tv"];
+
+// how far (m) the camera stands from a device when you walk up to it
+const VIEW_DIST = { microwave: 1.6, tv: 2.6, fridge: 2.3, ac: 3, light: 3 };
+
+/*
   MODEL FILE
   Put the GLB inside  frontend/public/models/  (CRA serves `public/` at the site root).
   The first path that loads is used.
@@ -55,6 +68,8 @@ const DEVICE_MATCHERS = {
 
   microwave: ["microondas", "microwave"],
 
+  tv: ["television"],
+
   motion: ["occupancysensor", "motionsensor"],
 
   temperature: ["sidetable2", "sidetable"],
@@ -66,6 +81,7 @@ const DEVICE_TYPES = [
   "ldr",
   "fridge",
   "microwave",
+  "tv",
   "temperature",
   "light",
   "motion",
@@ -77,6 +93,7 @@ const BADGE_TYPES = [
   "ac",
   "fridge",
   "microwave",
+  "tv",
   "temperature",
   "motion",
   "ldr",
@@ -87,6 +104,7 @@ const DEVICE_TITLES = {
   ac: "AC",
   fridge: "Fridge",
   microwave: "Microwave",
+  tv: "TV",
   temperature: "Temperature",
   motion: "Motion",
   ldr: "LDR",
@@ -208,6 +226,17 @@ const classifyName = (name) => {
   return "";
 };
 
+// strong yellow default material = Revit door-swing / clearance volume
+const isClearanceMesh = (mesh) => {
+  const color = mesh.material && mesh.material.color;
+  if (!color) return false;
+  const hex = parseInt(color.getHexString(), 16);
+  const r = hex >> 16;
+  const g = (hex >> 8) & 255;
+  const b = hex & 255;
+  return r > 200 && g > 170 && b < 60;
+};
+
 const percentile = (sortedValues, p) =>
   sortedValues[
     Math.min(
@@ -247,6 +276,8 @@ const badgeInfo = (type, data) => {
       return { value: onOff(data.fridge), tone: onOff(data.fridge) };
     case "microwave":
       return { value: onOff(data.microwave), tone: onOff(data.microwave) };
+    case "tv":
+      return { value: onOff(data.tv), tone: onOff(data.tv) };
     case "temperature":
       return { value: `${data.temperature ?? "--"} °C`, tone: "INFO" };
     case "motion":
@@ -755,7 +786,7 @@ export default function Viewer({ floor, room }) {
   };
   // Local demonstration states; these do not claim to control physical devices.
   const [roomControls, setRoomControls] = useState({
-    light: false,
+    light: true,
     ac: false,
     tv: false,
     fridge: false,
@@ -764,15 +795,17 @@ export default function Viewer({ floor, room }) {
     power: true,
   });
   const [roomTemp, setRoomTemp] = useState(24);
+  // Reads/writes the ref (not stale state) so 3D clicks and panel buttons agree.
   const changeRoomControl = (key) => {
-    setRoomControls((prev) => {
-      const next = { ...prev, [key]: !prev[key] };
-      demoDeviceRef.current = next;
-      window.dispatchEvent(
-        new CustomEvent("viewer:demo-devices", { detail: next }),
-      );
-      return next;
-    });
+    const next = {
+      ...demoDeviceRef.current,
+      [key]: !demoDeviceRef.current[key],
+    };
+    demoDeviceRef.current = next;
+    setRoomControls(next);
+    window.dispatchEvent(
+      new CustomEvent("viewer:demo-devices", { detail: next }),
+    );
   };
   const [sending, setSending] = useState(false);
   const [controlMessage, setControlMessage] = useState("");
@@ -792,6 +825,7 @@ export default function Viewer({ floor, room }) {
   const apiRef = useRef(null);
   const latestDeviceDataRef = useRef(deviceData);
   const demoDeviceRef = useRef(roomControls);
+  const roomTempRef = useRef(24);
 
   useEffect(() => {
     latestDeviceDataRef.current = deviceData;
@@ -880,14 +914,25 @@ export default function Viewer({ floor, room }) {
     );
 
   const toggleDevice = (type) => {
-    const data = latestDeviceDataRef.current;
-    const next = (key) =>
-      String(data[key]).toUpperCase() === "ON" ? "OFF" : "ON";
+    if (!SWITCHABLE.includes(type)) return;
 
-    if (type === "light") controlLight(next("light"));
-    else if (type === "ac") controlAC(next("ac"));
-    else if (type === "fridge") controlFridge(next("fridge"));
-    else if (type === "microwave") controlMicrowave(next("microwave"));
+    const demo = demoDeviceRef.current;
+    if (demo.power === false && !demo[type]) {
+      setControlMessage("Main Power OFF hai — pehle Main Power ON karo.");
+      return;
+    }
+
+    const turnOn = !demo[type];
+    changeRoomControl(type);
+    setControlMessage(`${DEVICE_TITLES[type]} ${turnOn ? "ON" : "OFF"}`);
+
+    if (SEND_TO_HARDWARE) {
+      const state = turnOn ? "ON" : "OFF";
+      if (type === "light") controlLight(state);
+      else if (type === "ac") controlAC(state);
+      else if (type === "fridge") controlFridge(state);
+      else if (type === "microwave") controlMicrowave(state);
+    }
   };
 
   const goToDevice = (type) => {
@@ -988,9 +1033,9 @@ export default function Viewer({ floor, room }) {
       const states = event.detail || {};
       demoDeviceRef.current = states;
       const on = states.power !== false && states.light !== false;
-      ambient.intensity = on ? 1.0 : 0.12;
-      light1.intensity = on ? 1.5 : 0.15;
-      light2.intensity = on ? 0.6 : 0.05;
+      ambient.intensity = on ? 1.0 : 0.22;
+      light1.intensity = on ? 1.5 : 0.25;
+      light2.intensity = on ? 0.6 : 0.1;
     };
     window.addEventListener("viewer:demo-devices", handleDemoLighting);
 
@@ -1052,6 +1097,7 @@ export default function Viewer({ floor, room }) {
     let lastRoomCheck = 0;
     let lastOcclusionCheck = 0;
     let areas = []; // [{ id, label, center, box, floorY, dist }]
+    let windowsList = []; // [{ box }] real windows (for the curtains)
     let planMode = null; // { type: "floor", floorNo } | { type: "room", number }
     let planItems = []; // HTML cards / tiles projected over the plan view
     const clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 1e6);
@@ -1695,6 +1741,7 @@ export default function Viewer({ floor, room }) {
       nearCache.x = Infinity;
 
       const byOwner = new Map();
+      const windowMap = new Map();
       const bedBoxes = [];
 
       items.forEach(({ mesh, box }) => {
@@ -1707,6 +1754,20 @@ export default function Viewer({ floor, room }) {
         }
 
         const type = classifyName(source);
+
+        if (
+          !type &&
+          /^window/.test(compact) &&
+          !/louver|trim|windows$/.test(compact)
+        ) {
+          const wOwner = getLabelOwner(mesh);
+          let w = windowMap.get(wOwner.uuid);
+          if (!w) {
+            w = { box: new THREE.Box3() };
+            windowMap.set(wOwner.uuid, w);
+          }
+          w.box.union(box);
+        }
 
         if (type) {
           const owner = getLabelOwner(mesh);
@@ -1741,6 +1802,27 @@ export default function Viewer({ floor, room }) {
 
         mesh.userData.isSolid = true;
         solids.push({ mesh, box });
+      });
+
+      windowsList = [...windowMap.values()];
+
+      // The Revit fridge family carries a yellow "door swing" clearance block.
+      // It is not part of the fridge: hide it and measure the real body only.
+      devices.forEach((device) => {
+        if (device.type !== "fridge") return;
+        const body = device.meshes.filter((m) => !isClearanceMesh(m));
+        if (!body.length || body.length === device.meshes.length) return;
+
+        device.meshes.forEach((m) => {
+          if (body.includes(m)) return;
+          m.visible = false;
+          m.userData.isDevice = false;
+        });
+        device.meshes = body;
+        device.box = new THREE.Box3();
+        body.forEach((m) =>
+          device.box.union(new THREE.Box3().setFromObject(m)),
+        );
       });
 
       devices.forEach((device) => {
@@ -2033,7 +2115,29 @@ export default function Viewer({ floor, room }) {
           const eye = new THREE.Vector3(x, f + WALK.eye, z);
           if (segmentBlocked(eye, c, 0.4)) continue;
 
-          const score = Math.abs(dist - preferred) + a * 0.001;
+          // furniture/appliances are not "solid": keep them out of the shot
+          const sight = c.clone().sub(eye);
+          const sightLen = sight.length();
+          sight.divideScalar(sightLen);
+          const sightRay = new THREE.Ray(eye, sight);
+          const hidden = devices.some((other) => {
+            if (other === device) return false;
+            if (other.type === "light" || other.type === "motion") return false;
+            if (other.box.distanceToPoint(eye) < 0.45) return true;
+            const hit = sightRay.intersectBox(other.box, new THREE.Vector3());
+            return !!hit && hit.distanceTo(eye) < sightLen - 0.15;
+          });
+          if (hidden) continue;
+
+          let score = Math.abs(dist - preferred) + a * 0.001;
+          if (device.front) {
+            // stand in front of the device, not behind it
+            score +=
+              (1 -
+                (Math.cos(ang) * device.front.x +
+                  Math.sin(ang) * device.front.z)) *
+              0.5;
+          }
           if (!best || score < best.score) best = { score, eye };
         }
         if (best) break;
@@ -2055,6 +2159,31 @@ export default function Viewer({ floor, room }) {
     };
 
     const goToType = (type) => {
+      if (type === "curtains") {
+        const ri =
+          currentRoom.index >= 0 ? currentRoom.index : selectedRoomIndex;
+        if (!fx.built.has(ri)) buildRoomFx(ri);
+        const it = fx.items.find((i) => i.type === "curtains" && i.room === ri);
+        if (!it) {
+          setControlMessage("Is room me window / curtain nahi mila.");
+          return;
+        }
+        setSelectedName("Curtains");
+        setSelectedControl("");
+        setControlMessage("");
+        viewDevice({
+          center: it.center.clone(),
+          room: ri,
+          front: it.front.clone(),
+          dist: 2.8,
+          box: new THREE.Box3().setFromCenterAndSize(
+            it.center,
+            new THREE.Vector3(1, 1, 1),
+          ),
+        });
+        return;
+      }
+
       const title = DEVICE_TITLES[type] || type;
       let target = null;
 
@@ -2086,6 +2215,7 @@ export default function Viewer({ floor, room }) {
       setSelectedControl(type);
       setControlMessage("");
 
+      if (target.dist == null && VIEW_DIST[type]) target.dist = VIEW_DIST[type];
       if (!viewDevice(target)) {
         setControlMessage(`${title} ke paas jaane ki jagah nahi mili.`);
       }
@@ -2338,10 +2468,11 @@ export default function Viewer({ floor, room }) {
         ac: "❄️",
         fridge: "🧊",
         microwave: "🍲",
+        tv: "📺",
       };
       const types = floorNo === 1 ? Object.keys(r.rep) : [];
 
-      ["light", "ac", "fridge", "microwave"]
+      ["light", "ac", "fridge", "microwave", "tv"]
         .filter((t) => types.includes(t))
         .forEach((type) => {
           const device = r.rep[type].device;
@@ -2409,6 +2540,737 @@ export default function Viewer({ floor, room }) {
     };
 
     apiRef.current = { goToRoom, goToType, goToArea, showFloor, showRoom };
+
+    /* ------------------------------------------------------------------
+       LIVE DEVICE EFFECTS  (what ON / OFF looks like inside the room)
+         microwave ON : glowing window + warm light, turntable food
+         TV ON        : moving picture on the screen + soft blue light
+         AC ON        : wind / cool air flowing out of the AC
+         Light ON     : glow around every ceiling fixture
+         every device : small LED on the device itself (red = OFF, green = ON)
+       Only the room you are standing in is drawn. State comes from
+       demoDeviceRef (the Smart Room Controls panel / 3D clicks).
+    ------------------------------------------------------------------ */
+    const fx = {
+      group: new THREE.Group(),
+      items: [],
+      built: new Set(),
+      glowTex: null,
+      mistTex: null,
+      tvCanvas: null,
+      tvTex: null,
+      tvLast: 0,
+    };
+    fx.group.name = "device-effects";
+    scene.add(fx.group);
+
+    const FX_LED_ON = 0x22ff66;
+    const FX_LED_OFF = 0xff2a2a;
+
+    const getGlowTexture = () => {
+      if (fx.glowTex) return fx.glowTex;
+      const c = document.createElement("canvas");
+      c.width = 64;
+      c.height = 64;
+      const g = c.getContext("2d");
+      const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grad.addColorStop(0, "rgba(255,255,255,1)");
+      grad.addColorStop(0.25, "rgba(255,255,255,0.85)");
+      grad.addColorStop(0.6, "rgba(255,255,255,0.25)");
+      grad.addColorStop(1, "rgba(255,255,255,0)");
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 64, 64);
+      fx.glowTex = new THREE.CanvasTexture(c);
+      return fx.glowTex;
+    };
+
+    // very soft, no hard core: used for the cold-air mist
+    const getMistTexture = () => {
+      if (fx.mistTex) return fx.mistTex;
+      const c = document.createElement("canvas");
+      c.width = 64;
+      c.height = 64;
+      const g = c.getContext("2d");
+      const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grad.addColorStop(0, "rgba(255,255,255,0.55)");
+      grad.addColorStop(0.5, "rgba(255,255,255,0.22)");
+      grad.addColorStop(1, "rgba(255,255,255,0)");
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 64, 64);
+      fx.mistTex = new THREE.CanvasTexture(c);
+      return fx.mistTex;
+    };
+
+    const makeGlow = (color, size, opacity) => {
+      const sprite = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: getGlowTexture(),
+          color,
+          transparent: true,
+          opacity,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        }),
+      );
+      sprite.scale.set(size, size, 1);
+      sprite.renderOrder = 20;
+      sprite.raycast = () => {};
+      return sprite;
+    };
+
+    const getTvTexture = () => {
+      if (fx.tvTex) return fx.tvTex;
+      fx.tvCanvas = document.createElement("canvas");
+      fx.tvCanvas.width = 256;
+      fx.tvCanvas.height = 144;
+      fx.tvTex = new THREE.CanvasTexture(fx.tvCanvas);
+      fx.tvTex.colorSpace = THREE.SRGBColorSpace;
+      return fx.tvTex;
+    };
+
+    // A simple animated "TV programme"
+    const drawTv = (t) => {
+      const c = fx.tvCanvas;
+      const g = c.getContext("2d");
+      const W = c.width;
+      const H = c.height;
+      const hue = (t * 28) % 360;
+
+      const grad = g.createLinearGradient(0, 0, W, H);
+      grad.addColorStop(0, `hsl(${hue},70%,46%)`);
+      grad.addColorStop(1, `hsl(${(hue + 90) % 360},75%,28%)`);
+      g.fillStyle = grad;
+      g.fillRect(0, 0, W, H);
+
+      for (let i = 0; i < 6; i++) {
+        const x = (Math.sin(t * 0.7 + i * 1.9) * 0.5 + 0.5) * W;
+        const y = (Math.cos(t * 0.5 + i * 2.3) * 0.5 + 0.5) * H;
+        const r = 16 + 14 * Math.sin(t * 1.3 + i);
+        g.fillStyle = `hsla(${(hue + i * 55) % 360},90%,72%,0.5)`;
+        g.beginPath();
+        g.arc(x, y, Math.abs(r), 0, Math.PI * 2);
+        g.fill();
+      }
+
+      g.fillStyle = "rgba(0,0,0,0.55)";
+      g.fillRect(0, H - 30, W, 30);
+      g.fillStyle = "#ffffff";
+      g.font = "bold 16px sans-serif";
+      g.fillText("HOTEL TV", 10, H - 10);
+      g.fillStyle = "#ef4444";
+      g.fillRect(W - 54, H - 24, 44, 18);
+      g.fillStyle = "#ffffff";
+      g.font = "bold 12px sans-serif";
+      g.fillText("LIVE", W - 47, H - 10);
+
+      fx.tvTex.needsUpdate = true;
+    };
+
+    // Where is the device facing, and how big is its front face?
+    const deviceFrame = (device, type) => {
+      const r = rooms[device.room];
+      let size = device.box.getSize(new THREE.Vector3());
+      let c = device.center.clone();
+      let panelAxis = null;
+
+      if (type === "tv") {
+        // the TV object also contains its stand: find the flat panel itself
+        let bestArea = 0;
+        device.meshes.forEach((mesh) => {
+          const b = new THREE.Box3().setFromObject(mesh);
+          const s3 = b.getSize(new THREE.Vector3());
+          const axis = s3.x < s3.z ? "x" : "z";
+          const thin = Math.min(s3.x, s3.z);
+          const wide = Math.max(s3.x, s3.z);
+          const area = wide * s3.y;
+          if (thin < 0.25 && s3.y > 0.3 && s3.y < 1.6 && area > bestArea) {
+            bestArea = area;
+            panelAxis = axis;
+            size = s3;
+            c = b.getCenter(new THREE.Vector3());
+          }
+        });
+      }
+
+      const toRoom = new THREE.Vector3(r.center.x - c.x, 0, r.center.z - c.z);
+      if (toRoom.lengthSq() < 1e-6) toRoom.set(0, 0, 1);
+      toRoom.normalize();
+
+      let f = null;
+      if (type === "tv") {
+        // a flat screen is thin: its normal is the thin horizontal axis
+        if (panelAxis) {
+          f =
+            panelAxis === "x"
+              ? new THREE.Vector3(1, 0, 0)
+              : new THREE.Vector3(0, 0, 1);
+        }
+      } else if (
+        type === "ac" &&
+        Math.min(size.x, size.z) < 0.25 &&
+        Math.max(size.x, size.z) > Math.min(size.x, size.z) * 2
+      ) {
+        f =
+          size.x < size.z
+            ? new THREE.Vector3(1, 0, 0)
+            : new THREE.Vector3(0, 0, 1);
+      } else {
+        // fixtures stand against a wall: they face away from the nearest one
+        let best = null;
+        for (let a = 0; a < 16; a++) {
+          const ang = (a / 16) * Math.PI * 2;
+          const dx = Math.cos(ang);
+          const dz = Math.sin(ang);
+          const hit = wallDistance(c.x, c.y, c.z, dx, dz, 1.6);
+          if (hit && (!best || hit.distance < best.d)) {
+            best = { d: hit.distance, dx, dz };
+          }
+        }
+        if (best) f = new THREE.Vector3(-best.dx, 0, -best.dz);
+      }
+
+      if (!f) f = toRoom.clone();
+      if (f.dot(toRoom) < 0) f.negate();
+
+      const right = new THREE.Vector3(f.z, 0, -f.x);
+      return {
+        c,
+        f,
+        right,
+        size,
+        half: (Math.abs(f.x) * size.x + Math.abs(f.z) * size.z) / 2,
+        width: Math.abs(right.x) * size.x + Math.abs(right.z) * size.z,
+        yaw: Math.atan2(f.x, f.z),
+      };
+    };
+
+    // point in front of the device: `ahead` m off its face, `side` m to the right
+    const frameAt = (fr, ahead, side, up) =>
+      fr.c
+        .clone()
+        .addScaledVector(fr.f, fr.half + ahead)
+        .addScaledVector(fr.right, side)
+        .add(new THREE.Vector3(0, up, 0));
+
+    const makeDeviceFx = (type, device, roomIndex) => {
+      const fr = deviceFrame(device, type);
+      device.front = fr.f.clone();
+
+      const group = new THREE.Group();
+      group.visible = false;
+      fx.group.add(group);
+
+      const item = {
+        type,
+        room: roomIndex,
+        group,
+        level: 0,
+        tick: null,
+        led: null,
+        frame: fr,
+      };
+
+      // status LED (red OFF / green ON) on the device itself
+      const ledSpec = {
+        microwave: [0.02, fr.width * 0.38, fr.size.y * 0.25, 0.07],
+        tv: [0.02, fr.width * 0.46, -fr.size.y * 0.5 + 0.03, 0.07],
+        ac: [0.04, fr.width * 0.38, 0, 0.1],
+        fridge: [0.03, fr.width * 0.3, fr.size.y * 0.2, 0.07],
+      }[type];
+      if (ledSpec) {
+        const led = makeGlow(FX_LED_OFF, ledSpec[3], 1);
+        led.position.copy(frameAt(fr, ledSpec[0], ledSpec[1], ledSpec[2]));
+        group.add(led);
+        item.led = led;
+      }
+
+      if (type === "microwave") {
+        const winX = -fr.width * 0.17;
+        const win = new THREE.Mesh(
+          new THREE.PlaneGeometry(fr.width * 0.5, fr.size.y * 0.62),
+          new THREE.MeshBasicMaterial({
+            color: 0xff9a3c,
+            transparent: true,
+            opacity: 0,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+        );
+        win.position.copy(frameAt(fr, 0.012, winX, 0));
+        win.rotation.y = fr.yaw;
+        win.renderOrder = 19;
+
+        const food = new THREE.Mesh(
+          new THREE.PlaneGeometry(fr.width * 0.2, fr.size.y * 0.24),
+          new THREE.MeshBasicMaterial({
+            color: 0x5a2a0a,
+            transparent: true,
+            opacity: 0,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+        );
+        food.rotation.y = fr.yaw;
+        food.renderOrder = 21;
+
+        const halo = makeGlow(0xff9a2e, Math.max(fr.width, fr.size.y) * 2.6, 0);
+        halo.position.copy(frameAt(fr, 0.2, winX, 0));
+
+        group.add(win, food, halo);
+        item.tick = (level, t) => {
+          const flick =
+            0.86 + 0.14 * Math.sin(t * 23) + 0.04 * Math.sin(t * 61);
+          win.material.opacity = level * 0.8 * flick;
+          halo.material.opacity = level * 0.5 * flick;
+          food.material.opacity = level * 0.55;
+          food.position.copy(
+            frameAt(
+              fr,
+              0.02,
+              winX + Math.sin(t * 1.6) * fr.width * 0.07,
+              -fr.size.y * 0.12,
+            ),
+          );
+          win.visible = halo.visible = food.visible = level > 0.01;
+        };
+      } else if (type === "tv") {
+        const screen = new THREE.Mesh(
+          new THREE.PlaneGeometry(fr.width * 0.92, fr.size.y * 0.84),
+          new THREE.MeshBasicMaterial({
+            map: getTvTexture(),
+            transparent: true,
+            opacity: 0,
+            toneMapped: false,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+        );
+        screen.position.copy(frameAt(fr, 0.012, 0, 0));
+        screen.rotation.y = fr.yaw;
+        screen.renderOrder = 19;
+
+        const halo = makeGlow(0x6aa8ff, fr.width * 2.4, 0);
+        halo.position.copy(frameAt(fr, 0.3, 0, 0));
+
+        group.add(screen, halo);
+        item.tick = (level, t) => {
+          screen.material.opacity = level;
+          halo.material.opacity =
+            level * 0.35 * (0.92 + 0.08 * Math.sin(t * 9));
+          screen.visible = halo.visible = level > 0.01;
+        };
+      } else if (type === "ac") {
+        // Soft cold-air plume (big translucent puffs that spread out) plus a
+        // few flowing air-stream lines, like an AC airflow illustration.
+        const N = 34;
+        const pos = new Float32Array(N * 3);
+        const vel = new Float32Array(N * 3);
+        const age = new Float32Array(N);
+        const life = new Float32Array(N);
+        const grow = new Float32Array(N);
+        const size = new Float32Array(N);
+        const alpha = new Float32Array(N);
+
+        const spawn = (i, spread) => {
+          const side = (Math.random() - 0.5) * fr.width * 0.95;
+          const p = frameAt(
+            fr,
+            0.08,
+            side,
+            -fr.size.y * 0.2 + Math.random() * 0.1,
+          );
+          const speed = 0.32 + Math.random() * 0.18;
+          pos[i * 3] = p.x;
+          pos[i * 3 + 1] = p.y;
+          pos[i * 3 + 2] = p.z;
+          vel[i * 3] =
+            fr.f.x * speed + fr.right.x * (Math.random() - 0.5) * 0.09;
+          vel[i * 3 + 1] = -0.14 - Math.random() * 0.07;
+          vel[i * 3 + 2] =
+            fr.f.z * speed + fr.right.z * (Math.random() - 0.5) * 0.09;
+          life[i] = 3.2 + Math.random() * 1.6;
+          age[i] = spread ? Math.random() * life[i] : 0;
+          grow[i] = 0.35 + Math.random() * 0.3;
+        };
+        for (let i = 0; i < N; i++) spawn(i, true);
+
+        const mistGeo = new THREE.BufferGeometry();
+        mistGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+        mistGeo.setAttribute("size", new THREE.BufferAttribute(size, 1));
+        mistGeo.setAttribute("alpha", new THREE.BufferAttribute(alpha, 1));
+        const mistMat = new THREE.ShaderMaterial({
+          uniforms: {
+            map: { value: getMistTexture() },
+            scale: { value: 400 },
+            tint: { value: new THREE.Color(0.87, 0.94, 1) },
+          },
+          vertexShader: `
+            attribute float size;
+            attribute float alpha;
+            uniform float scale;
+            varying float vA;
+            void main() {
+              vA = alpha;
+              vec4 mv = modelViewMatrix * vec4(position, 1.0);
+              gl_PointSize = min(size * scale / max(-mv.z, 0.1), 90.0);
+              gl_Position = projectionMatrix * mv;
+            }`,
+          fragmentShader: `
+            uniform sampler2D map;
+            uniform vec3 tint;
+            varying float vA;
+            void main() {
+              float a = texture2D(map, gl_PointCoord).a;
+              gl_FragColor = vec4(tint, a * vA);
+            }`,
+          transparent: true,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+        });
+        const mist = new THREE.Points(mistGeo, mistMat);
+        mist.frustumCulled = false;
+        mist.renderOrder = 22;
+        mist.raycast = () => {};
+
+        // flowing air-stream lines
+        const M = 4;
+        const K = 18;
+        const linePos = new Float32Array(M * K * 6);
+        const lineCol = new Float32Array(M * K * 6);
+        const lineGeo = new THREE.BufferGeometry();
+        lineGeo.setAttribute("position", new THREE.BufferAttribute(linePos, 3));
+        lineGeo.setAttribute("color", new THREE.BufferAttribute(lineCol, 3));
+        const streams = new THREE.LineSegments(
+          lineGeo,
+          new THREE.LineBasicMaterial({
+            vertexColors: true,
+            transparent: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+          }),
+        );
+        streams.frustumCulled = false;
+        streams.renderOrder = 22;
+        streams.raycast = () => {};
+
+        const halo = makeGlow(0xddefff, fr.width * 1.2, 0);
+        halo.position.copy(frameAt(fr, 0.15, 0, -fr.size.y * 0.1));
+
+        group.add(mist, streams, halo);
+        const streamPoint = (s, side, t, phase, reach, out, o) => {
+          const p = frameAt(
+            fr,
+            0.08 + s * reach,
+            side + Math.sin(s * 5 + t * 0.65 + phase) * 0.025 * s,
+            -fr.size.y * 0.2 - s * s * 0.35,
+          );
+          out[o] = p.x;
+          out[o + 1] = p.y;
+          out[o + 2] = p.z;
+        };
+
+        item.tick = (level, t, dt) => {
+          const visible = level > 0.01;
+          mist.visible = streams.visible = halo.visible = visible;
+          if (!visible) return;
+
+          // colder set-point = stronger, bluer wind
+          const strength = THREE.MathUtils.clamp(
+            (30 - roomTempRef.current) / 14,
+            0,
+            1,
+          );
+          const speedK = 0.52 + strength * 0.25;
+          halo.material.opacity = level * 0.025;
+          mistMat.uniforms.scale.value =
+            renderer.domElement.height /
+            (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+
+          for (let i = 0; i < N; i++) {
+            age[i] += dt;
+            if (age[i] > life[i]) spawn(i, false);
+
+            const drag = 1 - 0.18 * dt;
+            vel[i * 3] *= drag;
+            vel[i * 3 + 2] *= drag;
+            vel[i * 3 + 1] -= 0.02 * dt;
+            const curl = Math.sin(age[i] * 2.2 + i) * 0.035 * dt;
+            vel[i * 3] += fr.right.x * curl;
+            vel[i * 3 + 2] += fr.right.z * curl;
+
+            pos[i * 3] += vel[i * 3] * dt * speedK;
+            pos[i * 3 + 1] += vel[i * 3 + 1] * dt * speedK;
+            pos[i * 3 + 2] += vel[i * 3 + 2] * dt * speedK;
+
+            const k = age[i] / life[i];
+            size[i] = 0.09 + k * grow[i] * 0.35;
+            alpha[i] =
+              Math.pow(Math.sin(Math.PI * k), 1.3) *
+              0.055 *
+              level *
+              (0.6 + 0.4 * strength);
+          }
+          mistGeo.attributes.position.needsUpdate = true;
+          mistGeo.attributes.size.needsUpdate = true;
+          mistGeo.attributes.alpha.needsUpdate = true;
+
+          const reach = 1.45 + strength * 0.35;
+          for (let m = 0; m < M; m++) {
+            const side = (m / (M - 1) - 0.5) * fr.width * 0.9;
+            const phase = m * 1.7;
+            for (let k = 0; k < K; k++) {
+              const o = (m * K + k) * 6;
+              const s0 = k / K;
+              const s1 = (k + 1) / K;
+              streamPoint(s0, side, t, phase, reach, linePos, o);
+              streamPoint(s1, side, t, phase, reach, linePos, o + 3);
+              // a bright pulse travels outward along every stream
+              const pulse = (s) =>
+                Math.sin(Math.PI * ((s + t * 0.16 * speedK + m * 0.13) % 1));
+              const c0 = Math.max(0, pulse(s0)) * 0.035 * level;
+              const c1 = Math.max(0, pulse(s1)) * 0.035 * level;
+              lineCol[o] = 0.45 * c0;
+              lineCol[o + 1] = 0.75 * c0;
+              lineCol[o + 2] = c0;
+              lineCol[o + 3] = 0.45 * c1;
+              lineCol[o + 4] = 0.75 * c1;
+              lineCol[o + 5] = c1;
+            }
+          }
+          lineGeo.attributes.position.needsUpdate = true;
+          lineGeo.attributes.color.needsUpdate = true;
+        };
+      }
+      // fridge: LED only
+
+      return item;
+    };
+
+    const makeLightFx = (r) => {
+      const group = new THREE.Group();
+      group.visible = false;
+      fx.group.add(group);
+
+      const halos = [];
+      devices.forEach((d) => {
+        if (d.type !== "light" || d.room !== r.index) return;
+        const up = d.center.y - r.floorY;
+        if (up < 1.2 || up > 4) return;
+        const halo = makeGlow(0xffe2a8, 0.85, 0);
+        halo.position.set(d.center.x, d.center.y - 0.12, d.center.z);
+        group.add(halo);
+        halos.push(halo);
+      });
+
+      return {
+        type: "light",
+        room: r.index,
+        group,
+        level: 0,
+        led: null,
+        tick: (level) => {
+          halos.forEach((h) => {
+            // no white-out when the camera is right under a fixture
+            const near = THREE.MathUtils.clamp(
+              (h.position.distanceTo(camera.position) - 0.5) / 1.2,
+              0,
+              1,
+            );
+            h.material.opacity = level * 0.32 * near;
+            h.visible = level > 0.01;
+          });
+        },
+      };
+    };
+
+    // Curtains: two pleated panels that slide open / closed in front of a window
+    const makeCurtainFx = (r, w) => {
+      const size = w.box.getSize(new THREE.Vector3());
+      const c = w.box.getCenter(new THREE.Vector3());
+      const alongX = size.x > size.z;
+      const f = alongX
+        ? new THREE.Vector3(0, 0, 1)
+        : new THREE.Vector3(1, 0, 0);
+      const toRoom = new THREE.Vector3(r.center.x - c.x, 0, r.center.z - c.z);
+      if (f.dot(toRoom) < 0) f.negate();
+
+      const half = (alongX ? size.z : size.x) / 2;
+      const width = alongX ? size.x : size.z;
+      const bottom = r.floorY + 0.06;
+      const top = Math.min(w.box.max.y + 0.3, r.floorY + 2.75);
+      const H = Math.max(top - bottom, 1);
+      const W = width + 0.5;
+      const pw = (W / 2) * 1.04;
+
+      const group = new THREE.Group();
+      group.visible = false;
+      group.position.set(
+        c.x + f.x * (half + 0.22),
+        bottom,
+        c.z + f.z * (half + 0.22),
+      );
+      group.rotation.y = Math.atan2(f.x, f.z);
+      fx.group.add(group);
+
+      const rod = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.018, 0.018, W + 0.2, 8),
+        new THREE.MeshLambertMaterial({ color: 0x2b2b2b }),
+      );
+      rod.rotation.z = Math.PI / 2;
+      rod.position.set(0, H + 0.02, 0);
+      rod.raycast = () => {};
+      group.add(rod);
+
+      const item = {
+        type: "curtains",
+        room: r.index,
+        group,
+        level: demoDeviceRef.current.curtains === false ? 1 : 0,
+        led: null,
+        tick: null,
+        center: new THREE.Vector3(c.x, bottom + H / 2, c.z),
+        front: f.clone(),
+      };
+
+      const panels = [-1, 1].map((dir) => {
+        const geo = new THREE.PlaneGeometry(pw, H, 28, 1);
+        geo.translate((dir * -1 * pw) / 2 + 0, H / 2, 0);
+        // outer edge of the panel sits at x = 0 after the translate above
+        const base = geo.attributes.position.array.slice();
+        const mesh = new THREE.Mesh(
+          geo,
+          new THREE.MeshLambertMaterial({
+            color: 0xcdb89a,
+            side: THREE.DoubleSide,
+          }),
+        );
+        mesh.position.x = dir * (W / 2);
+        mesh.userData.isCurtain = item;
+        group.add(mesh);
+        return { mesh, base };
+      });
+
+      let lastAmp = -1;
+      item.tick = (level, t, dt, target) => {
+        const s = level * level * (3 - 2 * level);
+        const moving = Math.abs(target - level) > 0.003;
+        const scaleX = 0.16 + 0.84 * s;
+        const amp = 0.035 + (moving ? 0.025 * Math.sin(t * 9) : 0);
+        panels.forEach(({ mesh, base }) => {
+          mesh.scale.x = scaleX;
+          if (!moving && lastAmp === amp) return;
+          const arr = mesh.geometry.attributes.position.array;
+          for (let i = 0; i < arr.length; i += 3) {
+            arr[i + 2] = Math.sin(base[i] * 12.5 + (moving ? t * 3 : 0)) * amp;
+          }
+          mesh.geometry.attributes.position.needsUpdate = true;
+        });
+        lastAmp = amp;
+      };
+
+      return item;
+    };
+
+    const buildRoomFx = (index) => {
+      fx.built.add(index);
+      const r = rooms[index];
+      if (!r) return;
+
+      ["microwave", "tv", "ac", "fridge"].forEach((type) => {
+        const rep = r.rep[type];
+        if (rep) fx.items.push(makeDeviceFx(type, rep.device, index));
+      });
+      fx.items.push(makeLightFx(r));
+
+      // windows that belong to this room (nearest bed), biggest first
+      windowsList
+        .filter((w) => {
+          const wc = w.box.getCenter(new THREE.Vector3());
+          const sz = w.box.getSize(new THREE.Vector3());
+          if (Math.abs(wc.y - r.floorY) > 3.5) return false;
+          if (w.box.min.y > r.floorY + 1.6) return false;
+          if (Math.max(sz.x, sz.z) < 0.5 || sz.y < 0.6) return false;
+          if (Math.min(sz.x, sz.z) > 0.5) return false;
+          let best = null;
+          rooms.forEach((o) => {
+            const d = Math.hypot(wc.x - o.center.x, wc.z - o.center.z);
+            if (d < 9.5 && (!best || d < best.d)) best = { d, index: o.index };
+          });
+          return best && best.index === index;
+        })
+        .sort(
+          (a, b) =>
+            b.box.getSize(new THREE.Vector3()).y *
+              Math.max(
+                b.box.getSize(new THREE.Vector3()).x,
+                b.box.getSize(new THREE.Vector3()).z,
+              ) -
+            a.box.getSize(new THREE.Vector3()).y *
+              Math.max(
+                a.box.getSize(new THREE.Vector3()).x,
+                a.box.getSize(new THREE.Vector3()).z,
+              ),
+        )
+        .slice(0, 3)
+        .forEach((w) => fx.items.push(makeCurtainFx(r, w)));
+    };
+
+    const disposeEffects = () => {
+      fx.group.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) o.material.dispose();
+      });
+      fx.group.clear();
+      fx.items = [];
+      fx.built.clear();
+    };
+
+    const updateEffects = (now, dt) => {
+      const demo = demoDeviceRef.current || {};
+      const power = demo.power !== false;
+      const room =
+        walk.active && currentRoom.floorIdx === 0 && currentRoom.index >= 0
+          ? currentRoom.index
+          : -1;
+
+      if (room >= 0 && !fx.built.has(room)) buildRoomFx(room);
+      if (!fx.items.length) return;
+
+      const t = now / 1000;
+      const ease = Math.min(1, dt * 7);
+      let tvOn = false;
+
+      fx.items.forEach((item) => {
+        const here = item.room === room;
+        item.group.visible = here;
+        if (!here) {
+          if (item.type !== "curtains") item.level = 0;
+          return;
+        }
+
+        if (item.type === "curtains") {
+          // 0 = open, 1 = closed; slides over ~1.6 s
+          const target = demo.curtains === false ? 1 : 0;
+          const step = dt / 1.6;
+          item.level += Math.max(-step, Math.min(step, target - item.level));
+          item.tick(item.level, t, dt, target);
+          return;
+        }
+
+        const on = power && !!demo[item.type];
+        item.level += ((on ? 1 : 0) - item.level) * ease;
+        if (item.led)
+          item.led.material.color.setHex(on ? FX_LED_ON : FX_LED_OFF);
+        if (item.tick) item.tick(item.level, t, dt);
+        if (item.type === "tv" && item.level > 0.01) tvOn = true;
+      });
+
+      if (tvOn && now - fx.tvLast > 80) {
+        fx.tvLast = now;
+        drawTv(t);
+      }
+    };
 
     /* ------------------------------------------------------------------
        STATUS BADGES (live ON / OFF floating over each device of the room)
@@ -2487,9 +3349,10 @@ export default function Viewer({ floor, room }) {
 
       const data = { ...latestDeviceDataRef.current };
       const demo = demoDeviceRef.current;
-      for (const type of ["light", "ac", "fridge", "microwave"]) {
+      for (const type of SWITCHABLE) {
         data[type] = demo.power && demo[type] ? "ON" : "OFF";
       }
+      data.acTemp = roomTempRef.current;
       const active = new Set();
       const r =
         currentRoom.index >= 0 && currentRoom.floorIdx === 0
@@ -2582,11 +3445,23 @@ export default function Viewer({ floor, room }) {
 
       raycaster.setFromCamera(mouse, camera);
 
-      const intersects = raycaster.intersectObject(modelGroup, true);
+      const intersects = raycaster.intersectObjects(
+        [modelGroup, fx.group],
+        true,
+      );
 
       // first device hit, unless a wall is in front of it
       let device = null;
       for (const hit of intersects) {
+        const curtainFx = hit.object.userData.isCurtain;
+        if (curtainFx && curtainFx.group.visible && walk.active) {
+          changeRoomControl("curtains");
+          setSelectedName("Curtains");
+          setControlMessage(
+            `Curtains ${demoDeviceRef.current.curtains ? "Open" : "Closed"}`,
+          );
+          return;
+        }
         if (hit.object.userData.isDevice) {
           device = devices[hit.object.userData.deviceId];
           break;
@@ -2603,7 +3478,9 @@ export default function Viewer({ floor, room }) {
       setSelectedControl(type);
 
       const close =
-        walk.active && device.center.distanceTo(camera.position) < 3.5;
+        walk.active &&
+        (device.center.distanceTo(camera.position) < 3.5 ||
+          (device.room >= 0 && device.room === currentRoom.index));
 
       if (close) {
         selectedDevice = device;
@@ -3045,15 +3922,17 @@ export default function Viewer({ floor, room }) {
       camera.updateMatrixWorld();
       const data = { ...latestDeviceDataRef.current };
       const demo = demoDeviceRef.current;
-      for (const type of ["light", "ac", "fridge", "microwave"]) {
+      for (const type of SWITCHABLE) {
         data[type] = demo.power && demo[type] ? "ON" : "OFF";
       }
+      data.acTemp = roomTempRef.current;
       const key = JSON.stringify([
         data.light,
         data.ac,
         data.acTemp,
         data.fridge,
         data.microwave,
+        data.tv,
         roomCardRevision.current,
       ]);
       const w = mount.clientWidth;
@@ -3139,6 +4018,7 @@ export default function Viewer({ floor, room }) {
         if (planMode) updatePlanUi();
       }
 
+      updateEffects(performance.now(), delta);
       renderer.render(scene, camera);
     };
 
@@ -3186,6 +4066,12 @@ export default function Viewer({ floor, room }) {
 
       exitPointerLock();
       if (animationId) cancelAnimationFrame(animationId);
+
+      disposeEffects();
+      if (fx.glowTex) fx.glowTex.dispose();
+      if (fx.mistTex) fx.mistTex.dispose();
+      if (fx.tvTex) fx.tvTex.dispose();
+      scene.remove(fx.group);
 
       controls.dispose();
       renderer.dispose();
@@ -3369,10 +4255,19 @@ export default function Viewer({ floor, room }) {
                 padding: "8px 0",
               }}
             >
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{label}</span>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>
+                {key === "curtains"
+                  ? `Curtains (${roomControls.curtains ? "Open" : "Closed"})`
+                  : label}
+              </span>
               <button
                 type="button"
-                onClick={() => changeRoomControl(key)}
+                onClick={() => {
+                  changeRoomControl(key);
+                  // walk up to the device so you can see it switch
+                  if (SWITCHABLE.includes(key) || key === "curtains")
+                    apiRef.current?.goToType(key);
+                }}
                 aria-pressed={roomControls[key]}
                 style={{
                   minWidth: 58,
@@ -3385,7 +4280,13 @@ export default function Viewer({ floor, room }) {
                   background: roomControls[key] ? "#059669" : "#64748b",
                 }}
               >
-                {roomControls[key] ? "ON" : "OFF"}
+                {key === "curtains"
+                  ? roomControls[key]
+                    ? "OPEN"
+                    : "CLOSED"
+                  : roomControls[key]
+                    ? "ON"
+                    : "OFF"}
               </button>
             </div>
           ))}
@@ -3408,7 +4309,12 @@ export default function Viewer({ floor, room }) {
             min="16"
             max="30"
             value={roomTemp}
-            onChange={(e) => setRoomTemp(Number(e.target.value))}
+            onChange={(e) => {
+              const temp = Number(e.target.value);
+              roomTempRef.current = temp;
+              setRoomTemp(temp);
+              if (SEND_TO_HARDWARE) controlACTemp(temp);
+            }}
             style={{ width: "100%" }}
           />
           <div style={{ fontSize: 11, color: "#64748b", marginTop: 6 }}>
